@@ -10,9 +10,11 @@ The public page is not the security boundary. The local gateway is responsible f
 
 The page has no third-party scripts, analytics, fonts, images, package dependencies, service worker, or public backend. Project documents and audio travel directly between the browser and the authenticated gateway selected by the user.
 
-## Communication modes
+## Conversation flow
 
-Input and output are independent. Input can be **Type** or **Talk**. Output can be **Voice on** or **Voice muted**, and response text is always displayed. Typed audible responses are synthesized by the authenticated local gateway using the project's selected RAT voice; the public page does not use a cloud or browser speech provider.
+Endpoint and password are the entire visible setup. After authentication, RAT selects the most recent local project (or creates a `Voice conversation`), requests microphone access, and reduces to one live waveform. Tapping the waveform pauses or resumes listening. Pressing `/` while it is focused reveals text input only when needed.
+
+Completed utterances go directly to the authenticated gateway over HTTPS and return as the selected local RAT voice. Response text remains in an assistive live region rather than a permanent transcript panel. The public page does not use a cloud or browser speech provider.
 
 Never commit credentials, endpoint inventories, project exports, or user documents to this repository.
 
@@ -21,7 +23,6 @@ Never commit credentials, endpoint inventories, project exports, or user documen
 - `index.html`
 - `styles.css`
 - `app.js`
-- `planner.js`
 - `.nojekyll`
 - `README.md`
 - `SECURITY.md`
