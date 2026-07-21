@@ -14,7 +14,7 @@
       name="description"
       content="A minimal voice surface for a private local RAT planning engine."
     />
-    <link rel="stylesheet" href="./styles.css?v=rat-voice-3" />
+    <link rel="stylesheet" href="./styles.css?v=rat-voice-4" />
   </head>
   <body>
     <main class="app" id="app" data-mode="locked">
@@ -60,12 +60,14 @@
           class="waveform-surface"
           id="waveformSurface"
           type="button"
-          aria-label="Pause listening"
+          aria-label="Hold to speak"
+          aria-pressed="false"
         >
           <canvas id="waveformCanvas" aria-hidden="true"></canvas>
-          <span class="visually-hidden" id="waveformAction">Pause listening</span>
+          <span class="hold-label" id="holdLabel" aria-hidden="true">Hold to speak</span>
+          <span class="visually-hidden" id="waveformAction">Hold to speak</span>
         </button>
-        <p class="conversation-status" id="conversationStatus" aria-live="polite">waking</p>
+        <p class="conversation-status" id="conversationStatus" aria-live="polite">ready</p>
         <p class="conversation-message" id="conversationMessage" role="status" aria-live="polite"></p>
 
         <form class="text-composer" id="textComposer" hidden>
@@ -75,7 +77,6 @@
       </section>
     </main>
 
-    <audio id="responseAudio" preload="none"></audio>
-    <script src="./app.js?v=rat-voice-3" defer></script>
+    <script src="./app.js?v=rat-voice-4" defer></script>
   </body>
 </html>

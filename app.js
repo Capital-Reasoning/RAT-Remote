@@ -10,11 +10,11 @@ const ui = {
   waveformSurface: document.querySelector("#waveformSurface"),
   waveformCanvas: document.querySelector("#waveformCanvas"),
   waveformAction: document.querySelector("#waveformAction"),
+  holdLabel: document.querySelector("#holdLabel"),
   conversationStatus: document.querySelector("#conversationStatus"),
   conversationMessage: document.querySelector("#conversationMessage"),
   textComposer: document.querySelector("#textComposer"),
   textInput: document.querySelector("#textInput"),
-  responseAudio: document.querySelector("#responseAudio"),
 };
 
 const gateway = {
@@ -27,26 +27,20 @@ const state = {
   phase: "locked",
   projectId: "",
   audioContext: null,
-  responseSource: null,
   analyser: null,
+  responseNode: null,
   microphoneStream: null,
   microphoneSource: null,
   processor: null,
   silentGain: null,
-  listening: false,
-  speaking: false,
-  speechFrames: 0,
-  silenceMs: 0,
+  holdActive: false,
+  recording: false,
   captureMs: 0,
-  noiseFloor: 0.004,
-  preRoll: [],
-  preRollMs: 0,
   utterance: [],
   inputLevel: 0,
   processing: false,
-  queuedUtterance: null,
-  responseObjectUrl: "",
-  playbackBlocked: false,
+  requestController: null,
+  requestSerial: 0,
   animationFrame: 0,
 };
 
@@ -77,20 +71,19 @@ function setPhase(phase, message = "") {
   ui.app.dataset.mode = phase;
   const labels = {
     waking: "waking",
+    ready: "ready",
     listening: "listening",
-    hearing: "hearing",
     thinking: "thinking",
     speaking: "speaking",
-    paused: "paused",
     error: "try again",
   };
   ui.conversationStatus.textContent = labels[phase] || phase;
   if (message) setConversationMessage(message, phase === "error" ? "error" : "quiet");
-  ui.waveformSurface.setAttribute(
-    "aria-label",
-    state.listening ? "Pause listening" : "Resume listening",
-  );
-  ui.waveformAction.textContent = state.listening ? "Pause listening" : "Resume listening";
+  const action = state.holdActive ? "Release to send" : "Hold to speak";
+  ui.waveformSurface.setAttribute("aria-label", action);
+  ui.waveformSurface.setAttribute("aria-pressed", String(state.holdActive));
+  ui.waveformAction.textContent = action;
+  ui.holdLabel.textContent = action;
 }
 
 function gatewayHeaders(existing = {}) {
@@ -115,11 +108,11 @@ async function gatewayFetch(path, options = {}) {
 }
 
 async function responseError(response, fallback) {
-  const text = (await response.text()).trim();
+  const body = (await response.text()).trim();
   try {
-    return JSON.parse(text).error || text || fallback;
+    return JSON.parse(body).error || body || fallback;
   } catch (_error) {
-    return text || fallback;
+    return body || fallback;
   }
 }
 
@@ -173,7 +166,9 @@ async function loginGateway(event) {
     ui.conversationView.hidden = false;
     setPhase("waking");
     await selectConversationProject();
-    await startMicrophone();
+    setConversationMessage("");
+    setPhase("ready");
+    ui.waveformSurface.focus({ preventScroll: true });
   } catch (error) {
     ui.gatewayPassword.value = "";
     if (!gateway.authenticated) {
@@ -186,7 +181,7 @@ async function loginGateway(event) {
       setUnlockStatus(message, "error");
       return;
     }
-    setPhase("error", `${error.message || error} Tap the waveform to retry.`);
+    setPhase("error", `${error.message || error} Hold to retry.`);
   }
 }
 
@@ -198,21 +193,15 @@ async function ensureAudioContext() {
     state.analyser = state.audioContext.createAnalyser();
     state.analyser.fftSize = 1024;
     state.analyser.smoothingTimeConstant = 0.72;
-    state.responseSource = state.audioContext.createMediaElementSource(ui.responseAudio);
-    state.responseSource.connect(state.analyser);
     state.analyser.connect(state.audioContext.destination);
   }
   if (state.audioContext.state === "suspended") await state.audioContext.resume();
 }
 
 function resetCapture() {
-  state.speaking = false;
-  state.speechFrames = 0;
-  state.silenceMs = 0;
   state.captureMs = 0;
-  state.preRoll = [];
-  state.preRollMs = 0;
   state.utterance = [];
+  state.inputLevel = 0;
 }
 
 function cloneSamples(samples) {
@@ -228,41 +217,12 @@ function rootMeanSquare(samples) {
 }
 
 function captureAudio(event) {
-  if (!state.listening) return;
-  const samples = event.inputBuffer.getChannelData(0);
-  const copy = cloneSamples(samples);
-  const frameMs = (copy.length / state.audioContext.sampleRate) * 1000;
+  if (!state.recording || !state.holdActive) return;
+  const copy = cloneSamples(event.inputBuffer.getChannelData(0));
+  state.utterance.push(copy);
+  state.captureMs += (copy.length / state.audioContext.sampleRate) * 1000;
   const level = rootMeanSquare(copy);
   state.inputLevel = state.inputLevel * 0.72 + level * 0.28;
-  const threshold = Math.max(0.012, state.noiseFloor * 3.2);
-  const voiced = level > threshold;
-
-  if (!state.speaking) {
-    if (!voiced) state.noiseFloor = state.noiseFloor * 0.97 + level * 0.03;
-    state.preRoll.push(copy);
-    state.preRollMs += frameMs;
-    while (state.preRollMs > 320 && state.preRoll.length > 1) {
-      const removed = state.preRoll.shift();
-      state.preRollMs -= (removed.length / state.audioContext.sampleRate) * 1000;
-    }
-    state.speechFrames = voiced ? state.speechFrames + 1 : 0;
-    if (state.speechFrames >= 2) {
-      state.speaking = true;
-      state.utterance = [...state.preRoll];
-      state.captureMs = state.preRollMs;
-      state.silenceMs = 0;
-      stopPlayback();
-      setPhase("hearing");
-    }
-    return;
-  }
-
-  state.utterance.push(copy);
-  state.captureMs += frameMs;
-  state.silenceMs = voiced ? 0 : state.silenceMs + frameMs;
-  if ((state.silenceMs >= 720 && state.captureMs >= 320) || state.captureMs >= 24_000) {
-    finishUtterance();
-  }
 }
 
 function concatenateChunks(chunks) {
@@ -290,129 +250,8 @@ function resample(samples, sourceRate, targetRate = 16_000) {
   return output;
 }
 
-function finishUtterance() {
-  const chunks = state.utterance;
-  const sourceRate = state.audioContext.sampleRate;
-  resetCapture();
-  const utterance = resample(concatenateChunks(chunks), sourceRate);
-  if (utterance.length < 16_000 * 0.25) {
-    setPhase("listening");
-    return;
-  }
-  queueUtterance(utterance);
-}
-
-function queueUtterance(samples) {
-  if (state.processing) {
-    state.queuedUtterance = samples;
-    return;
-  }
-  sendUtterance(samples);
-}
-
-function decodeBase64Audio(value) {
-  const binary = window.atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new Blob([bytes], { type: "audio/wav" });
-}
-
-function releaseResponseUrl() {
-  if (!state.responseObjectUrl) return;
-  URL.revokeObjectURL(state.responseObjectUrl);
-  state.responseObjectUrl = "";
-}
-
-function stopPlayback() {
-  state.playbackBlocked = false;
-  ui.responseAudio.pause();
-  if (!ui.responseAudio.ended) ui.responseAudio.currentTime = 0;
-}
-
-async function playAudio(blob) {
-  releaseResponseUrl();
-  state.responseObjectUrl = URL.createObjectURL(blob);
-  ui.responseAudio.src = state.responseObjectUrl;
-  await ensureAudioContext();
-  setPhase("speaking");
-  try {
-    await ui.responseAudio.play();
-    state.playbackBlocked = false;
-  } catch (_error) {
-    state.playbackBlocked = true;
-    setPhase("paused", "Tap the waveform to hear the response.");
-  }
-}
-
-async function sendUtterance(samples) {
-  state.processing = true;
-  setPhase("thinking");
-  try {
-    const response = await gatewayFetch("/api/converse", {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: samples.buffer,
-    });
-    if (!response.ok) throw new Error(await responseError(response, "RAT did not understand that."));
-    const payload = await response.json();
-    ui.conversationMessage.textContent = payload.response || "";
-    if (payload.audio_wav) {
-      await playAudio(decodeBase64Audio(payload.audio_wav));
-    } else {
-      setPhase("listening");
-    }
-  } catch (error) {
-    const message = String(error.message || error);
-    if (message.includes("No speech detected")) {
-      setPhase("listening");
-      setConversationMessage("");
-    } else {
-      setPhase("error", `${message} Tap the waveform to continue.`);
-    }
-  } finally {
-    state.processing = false;
-    if (state.queuedUtterance) {
-      const queued = state.queuedUtterance;
-      state.queuedUtterance = null;
-      stopPlayback();
-      sendUtterance(queued);
-    }
-  }
-}
-
-async function startMicrophone() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Microphone access is unavailable in this browser.");
-  }
-  if (state.listening) return;
-  await ensureAudioContext();
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: { ideal: 1 },
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-    video: false,
-  });
-  state.microphoneStream = stream;
-  state.microphoneSource = state.audioContext.createMediaStreamSource(stream);
-  state.processor = state.audioContext.createScriptProcessor(2048, 1, 1);
-  state.silentGain = state.audioContext.createGain();
-  state.silentGain.gain.value = 0;
-  state.processor.onaudioprocess = captureAudio;
-  state.microphoneSource.connect(state.processor);
-  state.processor.connect(state.silentGain);
-  state.silentGain.connect(state.audioContext.destination);
-  state.listening = true;
-  resetCapture();
-  setConversationMessage("");
-  setPhase("listening");
-  ui.waveformSurface.focus({ preventScroll: true });
-}
-
 function stopMicrophone() {
-  state.listening = false;
+  state.recording = false;
   if (state.processor) state.processor.onaudioprocess = null;
   state.microphoneSource?.disconnect();
   state.processor?.disconnect();
@@ -422,57 +261,192 @@ function stopMicrophone() {
   state.microphoneSource = null;
   state.processor = null;
   state.silentGain = null;
+}
+
+async function startMicrophone() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Microphone access is unavailable in this browser.");
+  }
   resetCapture();
-  setPhase("paused");
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: { ideal: 1 },
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+    video: false,
+  });
+  if (!state.holdActive) {
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  state.microphoneStream = stream;
+  state.microphoneSource = state.audioContext.createMediaStreamSource(stream);
+  state.processor = state.audioContext.createScriptProcessor(2048, 1, 1);
+  state.silentGain = state.audioContext.createGain();
+  state.silentGain.gain.value = 0;
+  state.processor.onaudioprocess = captureAudio;
+  state.microphoneSource.connect(state.processor);
+  state.processor.connect(state.silentGain);
+  state.silentGain.connect(state.audioContext.destination);
+  state.recording = true;
 }
 
-async function toggleListening() {
-  if (!gateway.authenticated) return;
-  if (state.playbackBlocked) {
+function cancelCurrentResponse() {
+  state.requestSerial += 1;
+  state.requestController?.abort();
+  state.requestController = null;
+  state.processing = false;
+}
+
+function stopPlayback() {
+  const node = state.responseNode;
+  state.responseNode = null;
+  if (!node) return;
+  node.onended = null;
+  try {
+    node.stop();
+  } catch (_error) {
+    // The source may already have ended.
+  }
+  node.disconnect();
+}
+
+async function beginHold(event) {
+  if (!gateway.authenticated || state.holdActive) return;
+  event?.preventDefault();
+  if (event?.pointerId !== undefined) {
     try {
-      await ensureAudioContext();
-      await ui.responseAudio.play();
-      state.playbackBlocked = false;
-      setConversationMessage("");
+      ui.waveformSurface.setPointerCapture(event.pointerId);
     } catch (_error) {
-      setPhase("error", "Audio playback is blocked by this browser.");
+      // Pointer capture is optional; global release listeners remain active.
     }
-    return;
   }
-  if (!ui.responseAudio.paused && state.phase === "speaking") {
-    stopPlayback();
-    setPhase(state.listening ? "listening" : "paused");
-    return;
-  }
-  if (ui.responseAudio.src && state.phase === "paused" && !state.listening) {
+  state.holdActive = true;
+  cancelCurrentResponse();
+  stopPlayback();
+  setConversationMessage("");
+  setPhase("listening");
+  try {
+    // Resuming audio inside this gesture lets Safari play RAT's later response.
+    await ensureAudioContext();
+    if (!state.holdActive) return;
     await startMicrophone();
+  } catch (error) {
+    stopMicrophone();
+    if (state.holdActive) setPhase("error", `${error.message || error} Hold to retry.`);
+  }
+}
+
+async function endHold(event) {
+  if (!state.holdActive) return;
+  event?.preventDefault();
+  state.holdActive = false;
+  const chunks = state.utterance;
+  const captureMs = state.captureMs;
+  const sourceRate = state.audioContext?.sampleRate || 16_000;
+  const wasRecording = state.recording;
+  stopMicrophone();
+  resetCapture();
+  setPhase("ready");
+  if (!wasRecording || captureMs < 250 || !chunks.length) {
+    if (wasRecording) setConversationMessage("Hold a little longer, then release.");
     return;
   }
-  if (state.listening) {
-    stopMicrophone();
-  } else {
-    try {
-      await startMicrophone();
-    } catch (error) {
-      setPhase("error", `${error.message || error} Tap to retry.`);
+  const utterance = resample(concatenateChunks(chunks), sourceRate);
+  await sendUtterance(utterance);
+}
+
+function decodeBase64Audio(value) {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: "audio/wav" });
+}
+
+async function playAudio(blob, requestId = state.requestSerial) {
+  await ensureAudioContext();
+  const encoded = await blob.arrayBuffer();
+  const decoded = await state.audioContext.decodeAudioData(encoded);
+  if (requestId !== state.requestSerial || state.holdActive) return;
+  stopPlayback();
+  const node = state.audioContext.createBufferSource();
+  node.buffer = decoded;
+  node.connect(state.analyser);
+  state.responseNode = node;
+  node.onended = () => {
+    if (state.responseNode !== node) return;
+    state.responseNode = null;
+    node.disconnect();
+    if (!state.holdActive) setPhase("ready");
+  };
+  setPhase("speaking");
+  node.start();
+}
+
+async function sendUtterance(samples) {
+  const requestId = state.requestSerial + 1;
+  state.requestSerial = requestId;
+  const controller = new AbortController();
+  state.requestController = controller;
+  state.processing = true;
+  setPhase("thinking");
+  try {
+    const response = await gatewayFetch("/api/converse", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: samples.buffer,
+      signal: controller.signal,
+    });
+    if (requestId !== state.requestSerial) return;
+    if (!response.ok) throw new Error(await responseError(response, "RAT did not understand that."));
+    const payload = await response.json();
+    if (requestId !== state.requestSerial) return;
+    ui.conversationMessage.textContent = payload.response || "";
+    if (payload.audio_wav) {
+      await playAudio(decodeBase64Audio(payload.audio_wav), requestId);
+    } else {
+      setPhase("ready");
+    }
+  } catch (error) {
+    if (error.name === "AbortError" || requestId !== state.requestSerial) return;
+    const message = String(error.message || error);
+    if (message.includes("No speech detected")) {
+      setConversationMessage("");
+      setPhase("ready");
+    } else {
+      setPhase("error", `${message} Hold to try again.`);
+    }
+  } finally {
+    if (requestId === state.requestSerial) {
+      state.processing = false;
+      state.requestController = null;
     }
   }
 }
 
-async function speakText(text) {
+async function speakText(text, requestId) {
   const response = await gatewayFetch("/api/speech", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
+    signal: state.requestController?.signal,
   });
   if (!response.ok) throw new Error(await responseError(response, "Speech synthesis failed."));
-  await playAudio(await response.blob());
+  await playAudio(await response.blob(), requestId);
 }
 
 async function submitText(event) {
   event.preventDefault();
-  const text = ui.textInput.value.trim();
-  if (!text || !state.projectId || state.processing) return;
+  const value = ui.textInput.value.trim();
+  if (!value || !state.projectId) return;
+  cancelCurrentResponse();
+  stopPlayback();
+  const requestId = state.requestSerial + 1;
+  state.requestSerial = requestId;
+  const controller = new AbortController();
+  state.requestController = controller;
   ui.textInput.value = "";
   ui.textComposer.hidden = true;
   state.processing = true;
@@ -483,17 +457,24 @@ async function submitText(event) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: value }),
+        signal: controller.signal,
       },
     );
+    if (requestId !== state.requestSerial) return;
     if (!response.ok) throw new Error(await responseError(response, "RAT could not respond."));
     const turn = await response.json();
     ui.conversationMessage.textContent = turn.spoken_response || "";
-    await speakText(turn.spoken_response);
+    await speakText(turn.spoken_response, requestId);
   } catch (error) {
-    setPhase("error", error.message || String(error));
+    if (error.name !== "AbortError" && requestId === state.requestSerial) {
+      setPhase("error", error.message || String(error));
+    }
   } finally {
-    state.processing = false;
+    if (requestId === state.requestSerial) {
+      state.processing = false;
+      state.requestController = null;
+    }
   }
 }
 
@@ -505,6 +486,8 @@ async function lockConversation(callGateway = true) {
       // Local lock remains authoritative when the gateway cannot be reached.
     }
   }
+  state.holdActive = false;
+  cancelCurrentResponse();
   stopMicrophone();
   stopPlayback();
   gateway.bearer = "";
@@ -551,9 +534,9 @@ function drawWaveform(time) {
       amplitude = ((sample - 128) / 128) * height * 0.38 * envelope;
     } else if (state.phase === "thinking") {
       amplitude = Math.sin(progress * 18 + time / 360) * height * 0.045 * envelope;
-    } else if (state.phase === "hearing") {
+    } else if (state.phase === "listening") {
       amplitude = Math.sin(progress * 24 + time / 120) * height
-        * Math.min(0.12, state.inputLevel * 3.5) * envelope;
+        * Math.max(0.025, Math.min(0.18, state.inputLevel * 3.5)) * envelope;
     } else {
       amplitude = Math.sin(progress * 8 + time / 900) * height * 0.007 * envelope;
     }
@@ -567,29 +550,28 @@ function drawWaveform(time) {
   context.lineJoin = "round";
   context.strokeStyle = state.phase === "error"
     ? "rgba(255, 118, 95, 0.82)"
-    : state.phase === "speaking"
+    : ["listening", "speaking"].includes(state.phase)
       ? "rgba(183, 255, 90, 0.96)"
       : "rgba(236, 233, 223, 0.34)";
-  context.shadowBlur = state.phase === "speaking" ? 20 * density : 0;
+  context.shadowBlur = ["listening", "speaking"].includes(state.phase) ? 20 * density : 0;
   context.shadowColor = "rgba(183, 255, 90, 0.4)";
   context.stroke();
   state.animationFrame = window.requestAnimationFrame(drawWaveform);
 }
 
 ui.gatewayLoginForm.addEventListener("submit", loginGateway);
-ui.waveformSurface.addEventListener("click", toggleListening);
+ui.waveformSurface.addEventListener("pointerdown", beginHold);
+ui.waveformSurface.addEventListener("pointerup", endHold);
+ui.waveformSurface.addEventListener("pointercancel", endHold);
+ui.waveformSurface.addEventListener("lostpointercapture", endHold);
+ui.waveformSurface.addEventListener("contextmenu", (event) => event.preventDefault());
 ui.textComposer.addEventListener("submit", submitText);
-ui.responseAudio.addEventListener("ended", () => {
-  state.playbackBlocked = false;
-  releaseResponseUrl();
-  if (!state.processing) setPhase(state.listening ? "listening" : "paused");
-});
-ui.responseAudio.addEventListener("play", () => setPhase("speaking"));
 
 window.addEventListener("keydown", (event) => {
   if (!gateway.authenticated) return;
   if (event.key === "Escape") {
-    if (!ui.textComposer.hidden) {
+    if (state.holdActive) endHold(event);
+    else if (!ui.textComposer.hidden) {
       ui.textComposer.hidden = true;
       ui.textInput.value = "";
       ui.waveformSurface.focus();
@@ -602,7 +584,21 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     ui.textComposer.hidden = false;
     ui.textInput.focus();
+    return;
   }
+  if ([" ", "Enter"].includes(event.key)
+      && document.activeElement === ui.waveformSurface
+      && !event.repeat) {
+    beginHold(event);
+  }
+});
+
+window.addEventListener("keyup", (event) => {
+  if ([" ", "Enter"].includes(event.key) && state.holdActive) endHold(event);
+});
+
+window.addEventListener("blur", () => {
+  if (state.holdActive) endHold();
 });
 
 const suggestedGateway = location.protocol === "https:" && location.hostname.endsWith("github.io")
