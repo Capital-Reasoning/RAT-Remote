@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https:; media-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
+    <title>RAT Voice Terminal</title>
+    <meta
+      name="description"
+      content="Password-gated remote interface for a private local RAT planning and voice stack."
+    />
+    <link rel="stylesheet" href="./styles.css?v=rat-v0-remote-1" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand" aria-label="RAT Voice Terminal">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span>RAT / VOICE TERMINAL</span>
+        </div>
+        <div class="connection-pill" id="connectionPill" data-state="idle">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="connectionLabel">Offline</span>
+        </div>
+      </header>
+
+      <section class="gateway-panel" id="gatewayPanel" aria-labelledby="gatewayTitle">
+        <div class="gateway-copy">
+          <p class="eyebrow">PRIVATE MODEL GATEWAY</p>
+          <h2 id="gatewayTitle">Unlock your local RAT</h2>
+          <p>
+            This page is only the interface. Projects, documents, audio, and model work stay on the machine at the secure gateway below.
+          </p>
+        </div>
+        <form class="gateway-form" id="gatewayLoginForm" autocomplete="off">
+          <label class="field">
+            <span>Secure gateway URL</span>
+            <input id="gatewayUrl" type="url" inputmode="url" required autocomplete="off" placeholder="https://your-machine.tailnet-name.ts.net" />
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input id="gatewayPassword" type="password" required autocomplete="off" />
+          </label>
+          <div class="actions">
+            <button class="primary" id="gatewayLoginButton" type="submit">Unlock gateway</button>
+            <button class="secondary" id="gatewayLogoutButton" type="button" hidden>Lock</button>
+          </div>
+          <p class="gateway-status" id="gatewayStatus" role="status">Not connected. Credentials are held in memory only.</p>
+        </form>
+      </section>
+
+      <section class="hero" aria-labelledby="pageTitle">
+        <div>
+          <p class="eyebrow">LOCAL AUDIO EDGE</p>
+          <h1 id="pageTitle">Speak here.<br />Think over there.</h1>
+          <p class="lede">
+            Your browser owns the microphone, speaker, and echo cancellation.
+            The remote machine owns the models.
+          </p>
+        </div>
+
+        <div class="connect-panel">
+          <div class="secure-warning" id="secureWarning" hidden>
+            Microphone access requires a trusted HTTPS connection on a LAN.
+          </div>
+
+          <label class="field">
+            <span>Microphone</span>
+            <select id="inputDevice" aria-label="Microphone device">
+              <option value="">System default</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Speaker</span>
+            <select id="outputDevice" aria-label="Speaker device">
+              <option value="">System default</option>
+            </select>
+          </label>
+
+          <div class="actions">
+            <button class="primary" id="connectButton" type="button">
+              <span class="button-icon" aria-hidden="true"></span>
+              Connect audio
+            </button>
+            <button class="secondary" id="disconnectButton" type="button" disabled>
+              Disconnect
+            </button>
+          </div>
+
+          <p class="headphone-note">
+            Headphones give the cleanest latency measurement. Speaker mode uses
+            browser acoustic echo cancellation.
+          </p>
+        </div>
+      </section>
+
+      <section class="planner-section" aria-labelledby="plannerTitle">
+        <div class="planner-header">
+          <div>
+            <p class="eyebrow">PLANNING COMPILER</p>
+            <h2 id="plannerTitle">Canonical project state</h2>
+          </div>
+          <div class="planner-state" aria-live="polite">
+            <span id="stageBadge">No project</span>
+            <strong id="readinessBadge">Draft</strong>
+          </div>
+        </div>
+
+        <div class="project-toolbar">
+          <label class="field project-picker">
+            <span>Active project</span>
+            <select id="projectSelect" aria-label="Active planning project">
+              <option value="">Create or import a project</option>
+            </select>
+          </label>
+          <button class="secondary compact-button" id="refreshProjectButton" type="button">
+            Refresh
+          </button>
+          <button class="secondary compact-button" id="exportMarkdownButton" type="button" disabled>
+            Export MD
+          </button>
+          <button class="secondary compact-button" id="exportJsonButton" type="button" disabled>
+            Export JSON
+          </button>
+          <button class="secondary compact-button" id="exportDocxButton" type="button" disabled>
+            Export DOCX
+          </button>
+          <button class="secondary compact-button" id="exportPdfButton" type="button" disabled>
+            Export PDF
+          </button>
+          <button class="primary compact-button" id="exportBundleButton" type="button" disabled>
+            Download project
+          </button>
+        </div>
+
+        <div class="project-entry-grid">
+          <form class="project-form" id="newProjectForm">
+            <p class="eyebrow">NEW PROJECT</p>
+            <label class="field">
+              <span>Project title</span>
+              <input id="newProjectTitle" name="title" required maxlength="120" placeholder="e.g. Local planning assistant" />
+            </label>
+            <label class="field">
+              <span>Initial idea (optional)</span>
+              <textarea id="newProjectIdea" name="initial_idea" rows="3" placeholder="Describe the proposal in your own words."></textarea>
+            </label>
+            <label class="field">
+              <span>Data policy</span>
+              <select id="newProjectPolicy" name="data_policy">
+                <option value="LOCAL_ONLY">Local only</option>
+                <option value="LOCAL_WITH_WEB">Local with explicit web</option>
+                <option value="CLOUD_ALLOWED">Cloud allowed</option>
+                <option value="MANAGED_CLOUD">Managed cloud</option>
+              </select>
+            </label>
+            <button class="primary" type="submit">Create project</button>
+          </form>
+
+          <form class="project-form" id="importProjectForm">
+            <p class="eyebrow">EXISTING DOCUMENT</p>
+            <label class="field">
+              <span>Project document</span>
+              <input id="projectDocument" name="document" type="file" required accept=".md,.markdown,.txt,.json,.docx,.pdf,.rst,.yaml,.yml" />
+            </label>
+            <label class="field">
+              <span>Title override (optional)</span>
+              <input id="importProjectTitle" name="title" maxlength="120" placeholder="Use the document title" />
+            </label>
+            <label class="field">
+              <span>Data policy</span>
+              <select id="importProjectPolicy" name="data_policy">
+                <option value="LOCAL_ONLY">Local only</option>
+                <option value="LOCAL_WITH_WEB">Local with explicit web</option>
+                <option value="CLOUD_ALLOWED">Cloud allowed</option>
+                <option value="MANAGED_CLOUD">Managed cloud</option>
+              </select>
+            </label>
+            <button class="primary" type="submit">Import and structure</button>
+          </form>
+
+          <form class="project-form" id="importBundleForm">
+            <p class="eyebrow">CONTINUE PORTABLE PROJECT</p>
+            <label class="field">
+              <span>RAT project bundle</span>
+              <input id="projectBundle" name="bundle" type="file" required accept=".ratproject,application/vnd.rat.project+zip" />
+            </label>
+            <label class="field">
+              <span>Import behavior</span>
+              <select id="bundleImportMode" name="mode">
+                <option value="copy">Create a safe copy</option>
+                <option value="restore">Restore original project ID</option>
+              </select>
+            </label>
+            <p class="accessibility-note">
+              The bundle includes the graph, full event ledger, voice and communication profiles, and imported source text.
+            </p>
+            <button class="primary" type="submit">Upload and continue</button>
+          </form>
+        </div>
+
+        <div class="planner-message" id="plannerMessage" role="status">
+          Select a project to continue planning. Voice turns will update the same canonical graph.
+        </div>
+
+        <section class="profile-card" id="profilePanel" hidden aria-labelledby="profileTitle">
+          <div class="profile-heading">
+            <div>
+              <p class="eyebrow">VOICE + COMMUNICATION PROFILE</p>
+              <h3 id="profileTitle">Pessimistic Rat</h3>
+              <p id="profileDescription" class="profile-description"></p>
+            </div>
+            <span class="flagship-badge" id="flagshipBadge">FLAGSHIP DEFAULT</span>
+          </div>
+
+          <div class="profile-grid">
+            <label class="field">
+              <span>Communication preset</span>
+              <select id="communicationProfileSelect"></select>
+            </label>
+            <label class="field">
+              <span>Voice preset</span>
+              <select id="voiceProfileSelect"></select>
+            </label>
+            <label class="field range-field">
+              <span>Challenge <output id="challengeOutput">84%</output></span>
+              <input id="challengeLevel" type="range" min="0" max="1" step="0.01" />
+            </label>
+            <label class="field range-field">
+              <span>Socratic pressure <output id="socraticOutput">62%</output></span>
+              <input id="socraticPressure" type="range" min="0" max="1" step="0.01" />
+            </label>
+            <label class="field">
+              <span>Spoken word budget</span>
+              <input id="brevityWords" type="number" min="12" max="80" />
+            </label>
+            <label class="field range-field">
+              <span>Voice speed <output id="voiceSpeedOutput">0.92×</output></span>
+              <input id="voiceSpeed" type="range" min="0.7" max="1.35" step="0.01" />
+            </label>
+          </div>
+
+          <details class="profile-advanced">
+            <summary>Respiratory performance and accessibility</summary>
+            <div class="profile-grid respiratory-grid">
+              <label class="check-field">
+                <input id="respiratoryEffects" type="checkbox" />
+                <span>Enable fictional cough and wheeze</span>
+              </label>
+              <label class="field range-field">
+                <span>Cough intensity <output id="coughOutput">72%</output></span>
+                <input id="coughIntensity" type="range" min="0" max="1" step="0.01" />
+              </label>
+              <label class="field range-field">
+                <span>Wheeze intensity <output id="wheezeOutput">46%</output></span>
+                <input id="wheezeIntensity" type="range" min="0" max="1" step="0.01" />
+              </label>
+            </div>
+            <p class="accessibility-note">
+              This is a synthetic theatrical effect, not a health claim. Disable it without changing RAT’s planning behavior.
+            </p>
+          </details>
+
+          <div class="profile-actions">
+            <button class="primary" id="saveProfilesButton" type="button">Save profile</button>
+            <button class="secondary" id="previewVoiceButton" type="button">Preview connected voice</button>
+          </div>
+        </section>
+
+        <div class="plan-workspace" id="planWorkspace" hidden>
+          <article class="planning-turn-card">
+            <p class="eyebrow">NEXT HIGHEST-VALUE QUESTION</p>
+            <h3 id="nextQuestion">—</h3>
+            <form id="planningTurnForm">
+              <label class="field">
+                <span>Answer by text, or connect audio and answer aloud</span>
+                <textarea id="planningTurnText" rows="4" required placeholder="Add a decision, constraint, assumption, objection, or answer."></textarea>
+              </label>
+              <button class="primary" type="submit">Process answer</button>
+            </form>
+            <div class="spoken-response" id="spokenResponse">No planning turn processed yet.</div>
+            <p class="question-rationale" id="questionRationale">
+              RAT will explain why each question is worth your effort.
+            </p>
+          </article>
+
+          <aside class="gate-card">
+            <p class="eyebrow">READINESS GATES</p>
+            <ul id="gateList" class="gate-list"></ul>
+          </aside>
+        </div>
+
+        <section class="receipt-card" id="receiptCard" hidden>
+          <div>
+            <p class="eyebrow">ROI RECEIPT</p>
+            <h3>What changed this turn</h3>
+          </div>
+          <dl id="receiptGrid" class="receipt-grid"></dl>
+        </section>
+
+        <section class="graph-section" id="graphSection" hidden>
+          <div class="section-heading compact">
+            <div>
+              <p class="eyebrow">PLAN GRAPH</p>
+              <h2 id="graphTitle">Project nodes</h2>
+            </div>
+            <span class="node-count" id="nodeCount">0 nodes</span>
+          </div>
+          <div class="node-groups" id="nodeGroups"></div>
+        </section>
+      </section>
+
+      <section class="workspace" aria-label="Live voice session">
+        <article class="transcript-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">LIVE PREFIX</p>
+              <h2>What the remote model hears</h2>
+            </div>
+            <div class="listening-indicator" id="listeningIndicator">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+
+          <div class="transcript" id="transcript" aria-live="polite">
+            <span class="transcript-placeholder">Waiting for a voice session…</span>
+          </div>
+
+          <div class="comment-row">
+            <span class="echo-label">IMMEDIATE REFLECTION</span>
+            <strong id="modelComment">Waiting for the completed thought…</strong>
+          </div>
+        </article>
+
+        <aside class="metrics-card" aria-label="Latency measurements">
+          <div class="section-heading compact">
+            <div>
+              <p class="eyebrow">LATENCY</p>
+              <h2>Current turn</h2>
+            </div>
+          </div>
+          <dl class="metrics">
+            <div>
+              <dt>Turn length</dt>
+              <dd><span id="observedMetric">—</span><small>ms</small></dd>
+            </div>
+            <div>
+              <dt>ASR compute</dt>
+              <dd><span id="asrMetric">—</span><small>ms</small></dd>
+            </div>
+            <div>
+              <dt>TTS compute</dt>
+              <dd><span id="ttsMetric">—</span><small>ms</small></dd>
+            </div>
+            <div class="accent-metric">
+              <dt>Response compute</dt>
+              <dd><span id="onsetMetric">—</span><small>ms</small></dd>
+            </div>
+          </dl>
+          <div class="network-row">
+            <span>LAN round trip</span>
+            <strong><span id="rttMetric">—</span> ms</strong>
+          </div>
+        </aside>
+      </section>
+
+      <section class="events-section" aria-labelledby="eventsTitle">
+        <div class="section-heading compact">
+          <div>
+            <p class="eyebrow">SESSION EVENTS</p>
+            <h2 id="eventsTitle">Transport and model timeline</h2>
+          </div>
+          <button class="text-button" id="clearEventsButton" type="button">Clear</button>
+        </div>
+        <ol class="events" id="eventsList">
+          <li class="empty-event">No events yet.</li>
+        </ol>
+      </section>
+
+      <footer>
+        <span>Audio stays between this browser and your model machine.</span>
+        <span id="secureState">Checking connection security…</span>
+      </footer>
+    </main>
+
+    <audio id="remoteAudio" autoplay></audio>
+    <script src="./app.js?v=rat-v0-remote-1" defer></script>
+    <script src="./planner.js?v=rat-v0-remote-1" defer></script>
+  </body>
+</html>

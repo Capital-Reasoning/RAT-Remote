@@ -1,0 +1,9 @@
+.DS_Store
+*.ratproject
+*.docx
+*.pdf
+*.json
+*.md
+!README.md
+!SECURITY.md
+!LICENSE
