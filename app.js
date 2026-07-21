@@ -6,6 +6,7 @@ const ui = {
   inputDevice: document.querySelector("#inputDevice"),
   outputDevice: document.querySelector("#outputDevice"),
   remoteAudio: document.querySelector("#remoteAudio"),
+  speechAudio: document.querySelector("#speechAudio"),
   secureWarning: document.querySelector("#secureWarning"),
   secureState: document.querySelector("#secureState"),
   transcript: document.querySelector("#transcript"),
@@ -25,6 +26,12 @@ const ui = {
   gatewayLoginButton: document.querySelector("#gatewayLoginButton"),
   gatewayLogoutButton: document.querySelector("#gatewayLogoutButton"),
   gatewayStatus: document.querySelector("#gatewayStatus"),
+  voiceInputControls: document.querySelector("#voiceInputControls"),
+  textInputModeButton: document.querySelector("#textInputModeButton"),
+  voiceInputModeButton: document.querySelector("#voiceInputModeButton"),
+  inputModeHelp: document.querySelector("#inputModeHelp"),
+  outputMuteButton: document.querySelector("#outputMuteButton"),
+  outputModeLabel: document.querySelector("#outputModeLabel"),
 };
 
 const state = {
@@ -33,6 +40,10 @@ const state = {
   localStream: null,
   remoteStream: null,
   pingTimer: null,
+  speechController: null,
+  speechObjectUrl: "",
+  inputMode: "text",
+  outputMuted: false,
   events: [],
 };
 
@@ -90,7 +101,7 @@ async function gatewayFetch(path, options = {}) {
 function announceGatewayReady() {
   ui.gatewayLoginButton.disabled = true;
   ui.gatewayLogoutButton.hidden = false;
-  ui.connectButton.disabled = false;
+  ui.connectButton.disabled = state.inputMode !== "voice";
   setConnection("Gateway ready", "connected");
   gatewayStatus(
     `Unlocked ${gatewayState.apiBase}. The password and session token are kept in memory only.`,
@@ -144,6 +155,7 @@ async function logoutGateway() {
     // Locking locally remains valid when the gateway is unreachable.
   }
   disconnect();
+  stopTextResponse();
   gatewayState.bearer = "";
   gatewayState.authenticated = false;
   ui.connectButton.disabled = true;
@@ -162,6 +174,85 @@ window.ratGateway = {
 function setConnection(label, value) {
   ui.connectionLabel.textContent = label;
   ui.connectionPill.dataset.state = value;
+}
+
+function releaseSpeechUrl() {
+  if (state.speechObjectUrl) {
+    URL.revokeObjectURL(state.speechObjectUrl);
+    state.speechObjectUrl = "";
+  }
+}
+
+function stopTextResponse() {
+  state.speechController?.abort();
+  state.speechController = null;
+  ui.speechAudio.pause();
+  ui.speechAudio.removeAttribute("src");
+  ui.speechAudio.load();
+  releaseSpeechUrl();
+}
+
+function setInputMode(mode) {
+  if (!new Set(["text", "voice"]).has(mode)) return;
+  const changed = state.inputMode !== mode;
+  state.inputMode = mode;
+  if (mode === "text" && state.pc) disconnect();
+  ui.textInputModeButton.setAttribute("aria-pressed", String(mode === "text"));
+  ui.voiceInputModeButton.setAttribute("aria-pressed", String(mode === "voice"));
+  ui.voiceInputControls.hidden = mode !== "voice";
+  ui.inputModeHelp.textContent = mode === "voice"
+    ? "Microphone input · text transcript remains visible"
+    : "Keyboard input · no microphone";
+  ui.secureWarning.hidden = trustworthy || mode !== "voice";
+  ui.connectButton.disabled = !gatewayState.authenticated || mode !== "voice";
+  window.dispatchEvent(new CustomEvent("rat:input-mode", { detail: { mode } }));
+  if (changed) addEvent({ event: "input_mode", mode });
+}
+
+function setOutputMuted(muted, { announce = true } = {}) {
+  state.outputMuted = Boolean(muted);
+  ui.remoteAudio.muted = state.outputMuted;
+  ui.speechAudio.muted = state.outputMuted;
+  ui.outputDevice.disabled = state.outputMuted;
+  ui.outputMuteButton.setAttribute("aria-pressed", String(state.outputMuted));
+  ui.outputMuteButton.dataset.muted = String(state.outputMuted);
+  ui.outputModeLabel.textContent = state.outputMuted ? "Voice muted" : "Voice on";
+  if (state.outputMuted) stopTextResponse();
+  if (announce) addEvent({ event: "output_mode", muted: state.outputMuted });
+}
+
+async function speakTextResponse(value) {
+  const text = " ".concat(value || "").trim().replace(/\s+/g, " ").slice(0, 1000);
+  if (!text || state.outputMuted || !gatewayState.authenticated) return false;
+  stopTextResponse();
+  const controller = new AbortController();
+  state.speechController = controller;
+  try {
+    const response = await gatewayFetch("/api/speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error((await response.text()) || "Speech synthesis failed");
+    const blob = await response.blob();
+    if (controller.signal.aborted || state.outputMuted) return false;
+    state.speechObjectUrl = URL.createObjectURL(blob);
+    ui.speechAudio.src = state.speechObjectUrl;
+    await applyOutputDevice();
+    const inferenceMs = Number(response.headers.get("X-RAT-TTS-Inference-Ms"));
+    if (Number.isFinite(inferenceMs)) ui.ttsMetric.textContent = number(inferenceMs);
+    await ui.speechAudio.play();
+    addEvent({ event: "text_response_audio", text, tts_inference_ms: inferenceMs });
+    return true;
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      addEvent({ event: "error", message: `Text response audio failed: ${error.message || error}` });
+    }
+    return false;
+  } finally {
+    if (state.speechController === controller) state.speechController = null;
+  }
 }
 
 function number(value) {
@@ -186,6 +277,16 @@ function eventDetail(event) {
       return "Return audio stopped immediately for barge-in";
     case "voice_preview":
       return `Previewing ${event.voice_profile || "selected voice"}`;
+    case "text_response_audio":
+      return "Played local voice for the typed response";
+    case "text_input":
+      return `Typed “${event.text}”`;
+    case "text_response":
+      return `Rendered “${event.text}”`;
+    case "input_mode":
+      return `${event.mode === "voice" ? "Talk" : "Type"} input selected`;
+    case "output_mode":
+      return event.muted ? "Voice output muted; text remains visible" : "Voice output enabled";
     case "connection_state":
       return event.state;
     case "pong":
@@ -339,14 +440,19 @@ async function refreshDevices() {
 }
 
 async function applyOutputDevice() {
-  if (typeof ui.remoteAudio.setSinkId === "function") {
-    await ui.remoteAudio.setSinkId(ui.outputDevice.value);
+  for (const audio of [ui.remoteAudio, ui.speechAudio]) {
+    if (typeof audio.setSinkId === "function") {
+      await audio.setSinkId(ui.outputDevice.value);
+    }
   }
 }
 
 async function connect() {
   if (!gatewayState.authenticated) {
     throw new Error("Unlock the private model gateway first.");
+  }
+  if (state.inputMode !== "voice") {
+    throw new Error("Switch input to Talk before connecting the microphone.");
   }
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("This page is not allowed to access a microphone. Use trusted HTTPS.");
@@ -363,6 +469,7 @@ async function connect() {
   state.pc = pc;
   state.remoteStream = new MediaStream();
   ui.remoteAudio.srcObject = state.remoteStream;
+  ui.remoteAudio.muted = state.outputMuted;
 
   pc.addEventListener("track", async (event) => {
     state.remoteStream.addTrack(event.track);
@@ -433,7 +540,7 @@ function disconnect() {
   state.localStream = null;
   state.remoteStream = null;
   ui.remoteAudio.srcObject = null;
-  ui.connectButton.disabled = false;
+  ui.connectButton.disabled = !gatewayState.authenticated || state.inputMode !== "voice";
   ui.disconnectButton.disabled = true;
   ui.listeningIndicator.classList.remove("active");
   setConnection("Offline", "idle");
@@ -478,6 +585,24 @@ ui.clearEventsButton.addEventListener("click", () => {
   ui.eventsList.innerHTML = '<li class="empty-event">No events yet.</li>';
 });
 
+ui.textInputModeButton.addEventListener("click", () => setInputMode("text"));
+ui.voiceInputModeButton.addEventListener("click", () => setInputMode("voice"));
+ui.outputMuteButton.addEventListener("click", () => setOutputMuted(!state.outputMuted));
+ui.speechAudio.addEventListener("ended", releaseSpeechUrl);
+window.addEventListener("rat:text-input", (event) => {
+  const text = String(event.detail?.text || "").trim();
+  if (!text) return;
+  ui.transcript.textContent = text;
+  ui.modelComment.textContent = "Thinking…";
+  addEvent({ event: "text_input", text });
+});
+window.addEventListener("rat:text-response", (event) => {
+  const text = String(event.detail?.text || "").trim();
+  if (!text) return;
+  ui.modelComment.textContent = text;
+  addEvent({ event: "text_response", text });
+});
+
 const trustworthy = window.isSecureContext || ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
 ui.secureWarning.hidden = trustworthy;
 ui.secureState.textContent = trustworthy
@@ -503,4 +628,14 @@ window.ratVoiceControl = {
   isConnected() {
     return state.channel?.readyState === "open";
   },
+  inputMode() {
+    return state.inputMode;
+  },
+  outputMuted() {
+    return state.outputMuted;
+  },
+  speakTextResponse,
 };
+
+setOutputMuted(false, { announce: false });
+setInputMode("text");

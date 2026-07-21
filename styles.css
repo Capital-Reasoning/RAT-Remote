@@ -233,6 +233,105 @@ h1 {
   padding: 22px;
 }
 
+.communication-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.mode-control {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.mode-label,
+.mode-help {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.mode-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #091310;
+}
+
+.mode-option,
+.output-mode-button {
+  min-height: 38px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 12px;
+}
+
+.mode-option[aria-pressed="true"] {
+  color: #06110d;
+  border-color: var(--green);
+  background: var(--green);
+  font-weight: 700;
+}
+
+.output-mode-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-color: rgba(142, 240, 189, 0.28);
+  color: var(--green);
+  background: rgba(142, 240, 189, 0.06);
+}
+
+.output-mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.output-mode-button[data-muted="true"] {
+  color: var(--amber);
+  border-color: rgba(244, 199, 111, 0.3);
+  background: rgba(244, 199, 111, 0.06);
+}
+
+.voice-input-controls {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid rgba(142, 240, 189, 0.2);
+  border-radius: 11px;
+  background: rgba(142, 240, 189, 0.035);
+}
+
+.voice-input-controls[hidden] {
+  display: none;
+}
+
+.voice-input-controls .field,
+.voice-input-controls .actions {
+  margin-bottom: 0;
+}
+
+.voice-input-controls .actions {
+  margin-top: 12px;
+}
+
 .secure-warning {
   margin-bottom: 16px;
   padding: 11px 12px;
@@ -526,6 +625,21 @@ textarea {
 
 .spoken-response {
   margin-top: 14px;
+}
+
+.voice-input-hint {
+  min-height: 126px;
+  padding: 18px;
+  color: #b8cbc2;
+  border: 1px dashed rgba(142, 240, 189, 0.28);
+  border-radius: 10px;
+  background: rgba(142, 240, 189, 0.035);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.voice-input-hint[hidden] {
+  display: none;
 }
 
 .gate-list {
@@ -970,7 +1084,8 @@ footer {
   }
 
   .gateway-panel,
-  .gateway-form {
+  .gateway-form,
+  .communication-modes {
     grid-template-columns: 1fr;
   }
 

@@ -10,6 +10,10 @@ The public page is not the security boundary. The local gateway is responsible f
 
 The page has no third-party scripts, analytics, fonts, images, package dependencies, service worker, or public backend. Project documents and audio travel directly between the browser and the authenticated gateway selected by the user.
 
+## Communication modes
+
+Input and output are independent. Input can be **Type** or **Talk**. Output can be **Voice on** or **Voice muted**, and response text is always displayed. Typed audible responses are synthesized by the authenticated local gateway using the project's selected RAT voice; the public page does not use a cloud or browser speech provider.
+
 Never commit credentials, endpoint inventories, project exports, or user documents to this repository.
 
 ## Files intentionally published

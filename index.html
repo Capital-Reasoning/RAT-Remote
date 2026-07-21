@@ -14,7 +14,7 @@
       name="description"
       content="Password-gated remote interface for a private local RAT planning and voice stack."
     />
-    <link rel="stylesheet" href="./styles.css?v=rat-v0-remote-1" />
+    <link rel="stylesheet" href="./styles.css?v=rat-v0-remote-2" />
   </head>
   <body>
     <main class="shell">
@@ -69,12 +69,43 @@
             Microphone access requires a trusted HTTPS connection on a LAN.
           </div>
 
-          <label class="field">
-            <span>Microphone</span>
-            <select id="inputDevice" aria-label="Microphone device">
-              <option value="">System default</option>
-            </select>
-          </label>
+          <div class="communication-modes" aria-label="Communication modes">
+            <div class="mode-control">
+              <span class="mode-label">Input</span>
+              <div class="segmented-control" role="group" aria-label="Input mode">
+                <button class="mode-option" id="textInputModeButton" type="button" aria-pressed="true">Type</button>
+                <button class="mode-option" id="voiceInputModeButton" type="button" aria-pressed="false">Talk</button>
+              </div>
+              <span class="mode-help" id="inputModeHelp">Keyboard input · no microphone</span>
+            </div>
+            <div class="mode-control">
+              <span class="mode-label">Output</span>
+              <button class="output-mode-button" id="outputMuteButton" type="button" aria-pressed="false" data-muted="false">
+                <span class="output-mode-dot" aria-hidden="true"></span>
+                <span id="outputModeLabel">Voice on</span>
+              </button>
+              <span class="mode-help">Response text is always shown</span>
+            </div>
+          </div>
+
+          <div class="voice-input-controls" id="voiceInputControls" hidden>
+            <label class="field">
+              <span>Microphone</span>
+              <select id="inputDevice" aria-label="Microphone device">
+                <option value="">System default</option>
+              </select>
+            </label>
+
+            <div class="actions">
+              <button class="primary" id="connectButton" type="button">
+                <span class="button-icon" aria-hidden="true"></span>
+                Connect microphone
+              </button>
+              <button class="secondary" id="disconnectButton" type="button" disabled>
+                Disconnect
+              </button>
+            </div>
+          </div>
 
           <label class="field">
             <span>Speaker</span>
@@ -83,19 +114,9 @@
             </select>
           </label>
 
-          <div class="actions">
-            <button class="primary" id="connectButton" type="button">
-              <span class="button-icon" aria-hidden="true"></span>
-              Connect audio
-            </button>
-            <button class="secondary" id="disconnectButton" type="button" disabled>
-              Disconnect
-            </button>
-          </div>
-
           <p class="headphone-note">
-            Headphones give the cleanest latency measurement. Speaker mode uses
-            browser acoustic echo cancellation.
+            Type or talk independently of whether voice output is muted. Headphones
+            give the cleanest latency measurement when both directions use audio.
           </p>
         </div>
       </section>
@@ -283,6 +304,10 @@
               </label>
               <button class="primary" type="submit">Process answer</button>
             </form>
+            <div class="voice-input-hint" id="voiceInputHint" hidden>
+              Talk mode is active. Connect the microphone above, then answer aloud.
+              Switch input to <strong>Type</strong> to use the keyboard.
+            </div>
             <div class="spoken-response" id="spokenResponse">No planning turn processed yet.</div>
             <p class="question-rationale" id="questionRationale">
               RAT will explain why each question is worth your effort.
@@ -389,7 +414,8 @@
     </main>
 
     <audio id="remoteAudio" autoplay></audio>
-    <script src="./app.js?v=rat-v0-remote-1" defer></script>
-    <script src="./planner.js?v=rat-v0-remote-1" defer></script>
+    <audio id="speechAudio" preload="none"></audio>
+    <script src="./app.js?v=rat-v0-remote-2" defer></script>
+    <script src="./planner.js?v=rat-v0-remote-2" defer></script>
   </body>
 </html>

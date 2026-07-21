@@ -21,6 +21,7 @@ const plannerUi = {
   planWorkspace: document.querySelector("#planWorkspace"),
   planningTurnForm: document.querySelector("#planningTurnForm"),
   planningTurnText: document.querySelector("#planningTurnText"),
+  voiceInputHint: document.querySelector("#voiceInputHint"),
   nextQuestion: document.querySelector("#nextQuestion"),
   spokenResponse: document.querySelector("#spokenResponse"),
   gateList: document.querySelector("#gateList"),
@@ -59,6 +60,7 @@ const plannerState = {
   projectId: null,
   view: null,
   busy: false,
+  inputMode: "text",
   profiles: { communication: [], voice: [], defaults: {} },
 };
 
@@ -98,7 +100,20 @@ function setBusy(value) {
   plannerUi.newProjectForm.querySelector("button").disabled = value;
   plannerUi.importProjectForm.querySelector("button").disabled = value;
   plannerUi.importBundleForm.querySelector("button").disabled = value;
-  plannerUi.planningTurnForm.querySelector("button").disabled = value;
+  plannerUi.planningTurnForm.querySelector("button").disabled = (
+    value || plannerState.inputMode !== "text"
+  );
+}
+
+function applyInputMode(mode) {
+  plannerState.inputMode = mode === "voice" ? "voice" : "text";
+  plannerUi.planningTurnForm.hidden = plannerState.inputMode !== "text";
+  plannerUi.voiceInputHint.hidden = plannerState.inputMode === "text";
+  const submit = plannerUi.planningTurnForm.querySelector("button");
+  submit.disabled = plannerState.busy || plannerState.inputMode !== "text";
+  if (plannerState.inputMode === "text" && !plannerState.busy) {
+    plannerUi.planningTurnText.focus({ preventScroll: true });
+  }
 }
 
 async function loadProfileCatalog() {
@@ -301,15 +316,21 @@ async function saveProfiles({ quiet = false } = {}) {
 async function previewVoice() {
   const saved = await saveProfiles({ quiet: true });
   if (!saved) return;
+  const previewText = "Mm. Another plan with several preventable ways to fail. Which assumption will betray us first?";
   const sent = window.ratVoiceControl?.send({
     type: "preview_voice",
-    text: "Mm. Another plan with several preventable ways to fail. Which assumption will betray us first?",
+    text: previewText,
   });
+  const played = sent
+    ? false
+    : await window.ratVoiceControl?.speakTextResponse(previewText);
   plannerMessage(
     sent
       ? "Voice preview queued on the connected speaker."
-      : "Connect audio first, then preview the selected voice.",
-    sent ? "ok" : "error",
+      : played
+        ? "Voice preview played through local speech output."
+        : "Unmute voice output or connect Talk mode to preview the selected voice.",
+    sent || played ? "ok" : "error",
   );
 }
 
@@ -522,6 +543,7 @@ async function processPlanningTurn(event) {
   if (!text) return;
   setBusy(true);
   plannerMessage("Extracting atomic changes and checking readiness…");
+  window.dispatchEvent(new CustomEvent("rat:text-input", { detail: { text } }));
   try {
     const response = await plannerFetch(
       `/api/projects/${encodeURIComponent(plannerState.projectId)}/turn`,
@@ -536,6 +558,12 @@ async function processPlanningTurn(event) {
     plannerUi.spokenResponse.textContent = turn.spoken_response;
     plannerUi.questionRationale.textContent = turn.question_rationale || "";
     renderReceipt(turn.receipt);
+    window.dispatchEvent(
+      new CustomEvent("rat:text-response", {
+        detail: { text: turn.spoken_response },
+      }),
+    );
+    window.ratVoiceControl?.speakTextResponse(turn.spoken_response);
     await refreshProject();
   } catch (error) {
     plannerMessage(error.message || String(error), "error");
@@ -624,6 +652,10 @@ window.addEventListener("rat:voice-event", (event) => {
   }
 });
 
+window.addEventListener("rat:input-mode", (event) => {
+  applyInputMode(event.detail?.mode);
+});
+
 async function startPlanner() {
   setBusy(true);
   plannerMessage("Loading projects from the private gateway…");
@@ -644,6 +676,8 @@ window.addEventListener("rat:auth-lost", () => {
   plannerMessage("Gateway locked. Unlock it above to access local projects.", "error");
   setBusy(true);
 });
+
+applyInputMode(window.ratVoiceControl?.inputMode() || "text");
 
 if (window.ratGateway?.isAuthenticated()) {
   startPlanner();
