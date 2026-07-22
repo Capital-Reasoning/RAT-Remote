@@ -181,7 +181,7 @@ button {
 }
 
 .waveform-surface:focus-visible {
-  box-shadow: 0 0 0 2px var(--accent);
+  box-shadow: 0 0 0 2px rgba(236, 233, 223, 0.32);
 }
 
 .waveform-surface:hover {
