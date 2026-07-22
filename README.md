@@ -12,9 +12,9 @@ The page has no third-party scripts, analytics, fonts, images, package dependenc
 
 ## Conversation flow
 
-Endpoint and password are the entire visible setup. After authentication, RAT selects the most recent local project (or creates a `Voice conversation`), requests microphone access, and reduces to one live waveform. Tapping the waveform pauses or resumes listening. Pressing `/` while it is focused reveals text input only when needed.
+Endpoint and password are the entire visible setup. After authentication, RAT selects the most recent local project (or creates a `Voice conversation`) and reduces to one live waveform. Hold the waveform to open the microphone; releasing it closes the microphone and submits the utterance. Pressing `/` while the waveform is focused reveals text input only when needed.
 
-Completed utterances go directly to the authenticated gateway over HTTPS and return as the selected local RAT voice. Response text remains in an assistive live region rather than a permanent transcript panel. The public page does not use a cloud or browser speech provider.
+Completed utterances go directly to the authenticated gateway over HTTPS. A small local mull model first reflects the tail of the utterance while the planning model selects one high-value Socratic question. The main answer follows in the selected local RAT voice. Response text remains in an assistive live region rather than a permanent transcript panel. The public page does not use a cloud or browser speech provider.
 
 Never commit credentials, endpoint inventories, project exports, or user documents to this repository.
 

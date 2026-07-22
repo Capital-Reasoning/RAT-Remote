@@ -29,6 +29,7 @@ const state = {
   audioContext: null,
   analyser: null,
   responseNode: null,
+  responseResolve: null,
   microphoneStream: null,
   microphoneSource: null,
   processor: null,
@@ -302,8 +303,13 @@ function cancelCurrentResponse() {
 
 function stopPlayback() {
   const node = state.responseNode;
+  const resolve = state.responseResolve;
   state.responseNode = null;
-  if (!node) return;
+  state.responseResolve = null;
+  if (!node) {
+    resolve?.(false);
+    return;
+  }
   node.onended = null;
   try {
     node.stop();
@@ -311,6 +317,7 @@ function stopPlayback() {
     // The source may already have ended.
   }
   node.disconnect();
+  resolve?.(false);
 }
 
 async function beginHold(event) {
@@ -365,24 +372,29 @@ function decodeBase64Audio(value) {
   return new Blob([bytes], { type: "audio/wav" });
 }
 
-async function playAudio(blob, requestId = state.requestSerial) {
+async function playAudio(blob, requestId = state.requestSerial, endingPhase = "ready") {
   await ensureAudioContext();
   const encoded = await blob.arrayBuffer();
   const decoded = await state.audioContext.decodeAudioData(encoded);
-  if (requestId !== state.requestSerial || state.holdActive) return;
+  if (requestId !== state.requestSerial || state.holdActive) return false;
   stopPlayback();
   const node = state.audioContext.createBufferSource();
   node.buffer = decoded;
   node.connect(state.analyser);
   state.responseNode = node;
-  node.onended = () => {
-    if (state.responseNode !== node) return;
-    state.responseNode = null;
-    node.disconnect();
-    if (!state.holdActive) setPhase("ready");
-  };
-  setPhase("speaking");
-  node.start();
+  return new Promise((resolve) => {
+    state.responseResolve = resolve;
+    node.onended = () => {
+      if (state.responseNode !== node) return;
+      state.responseNode = null;
+      state.responseResolve = null;
+      node.disconnect();
+      if (!state.holdActive) setPhase(endingPhase);
+      resolve(true);
+    };
+    setPhase("speaking");
+    node.start();
+  });
 }
 
 async function sendUtterance(samples) {
@@ -393,29 +405,51 @@ async function sendUtterance(samples) {
   state.processing = true;
   setPhase("thinking");
   try {
-    const response = await gatewayFetch("/api/converse", {
+    const mullResponse = await gatewayFetch("/api/mull", {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
       body: samples.buffer,
       signal: controller.signal,
     });
     if (requestId !== state.requestSerial) return;
-    if (!response.ok) throw new Error(await responseError(response, "RAT did not understand that."));
+    if (!mullResponse.ok) {
+      throw new Error(await responseError(mullResponse, "RAT did not understand that."));
+    }
+    const mull = await mullResponse.json();
+    if (requestId !== state.requestSerial) return;
+    ui.conversationMessage.textContent = mull.mull || "";
+
+    const mullPlayback = mull.audio_wav
+      ? playAudio(decodeBase64Audio(mull.audio_wav), requestId, "thinking")
+      : Promise.resolve(false);
+    const responseRequest = gatewayFetch("/api/respond", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: mull.transcript }),
+      signal: controller.signal,
+    });
+    const [response] = await Promise.all([responseRequest, mullPlayback]);
+    if (requestId !== state.requestSerial) return;
+    if (!response.ok) {
+      throw new Error(await responseError(response, "RAT could not finish that thought."));
+    }
     const payload = await response.json();
     if (requestId !== state.requestSerial) return;
     ui.conversationMessage.textContent = payload.response || "";
-    if (payload.audio_wav) {
-      await playAudio(decodeBase64Audio(payload.audio_wav), requestId);
-    } else {
+    if (!payload.audio_wav) {
       setPhase("ready");
+      return;
     }
+    await playAudio(decodeBase64Audio(payload.audio_wav), requestId);
   } catch (error) {
     if (error.name === "AbortError" || requestId !== state.requestSerial) return;
     const message = String(error.message || error);
     if (message.includes("No speech detected")) {
+      stopPlayback();
       setConversationMessage("");
       setPhase("ready");
     } else {
+      stopPlayback();
       setPhase("error", `${message} Hold to try again.`);
     }
   } finally {
