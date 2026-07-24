@@ -37,9 +37,16 @@ Deeper turns receive concise spoken stage updates and finish with the normal
 pipeline's Talkie output verbatim.
 
 GPT-OSS also chooses a constrained chord carrier from the conversational tone.
-Generated Chatterbox speech is mixed 50% dry with 50% 18-band chord-vocoded
-speech. The selected chord is shown beside the immediate response; the cached
-listening cue stays dry so it is never delayed by tone selection.
+Generated Chatterbox speech uses the 18-band chord vocoder fully wet. The
+selected chord is shown beside the immediate response; the cached listening cue
+stays dry so it is never delayed by tone selection.
+
+GPT-OSS supplies a grounded reply brief, then Talkie renders it after GPT-OSS
+releases Metal execution. A deterministic supervisor keeps Talkie's candidate
+only when it preserves the brief, speaker roles, clarification needs, supported
+numbers, and scope.
+Otherwise the interface transparently labels and speaks the OSS-supervised
+wording.
 
 The public conversation frames that work in Talkie's first person: “Let me
 consider that more deeply,” followed by broad summaries at stage changes and

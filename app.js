@@ -265,10 +265,13 @@ function renderTurn(turn) {
       : ["backchannel", "progress"].includes(event.kind)
         ? event.kind
         : "";
+    const immediateLabel = event.dialogue_source === "gpt-oss:20b_fallback"
+      ? "Immediate · OSS supervised"
+      : labels[event.kind] || event.kind;
     const chordName = event.voice_effect?.chord_name;
     const label = event.kind === "immediate" && chordName
-      ? `${labels[event.kind]} · ${chordName}`
-      : labels[event.kind] || event.kind;
+      ? `${immediateLabel} · ${chordName}`
+      : immediateLabel;
     appendMessage(
       `${turn.id}:event:${event.id}`,
       "assistant",
