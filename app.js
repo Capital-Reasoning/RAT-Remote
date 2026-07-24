@@ -265,10 +265,14 @@ function renderTurn(turn) {
       : ["backchannel", "progress"].includes(event.kind)
         ? event.kind
         : "";
+    const chordName = event.voice_effect?.chord_name;
+    const label = event.kind === "immediate" && chordName
+      ? `${labels[event.kind]} · ${chordName}`
+      : labels[event.kind] || event.kind;
     appendMessage(
       `${turn.id}:event:${event.id}`,
       "assistant",
-      labels[event.kind] || event.kind,
+      label,
       event.text,
       kind,
     );
