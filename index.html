@@ -1,82 +1,136 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
-    <meta name="referrer" content="no-referrer" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https:; media-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
-    />
-    <title>RAT</title>
-    <meta
-      name="description"
-      content="A minimal voice surface for a private local RAT planning engine."
-    />
-    <link rel="stylesheet" href="./styles.css?v=rat-voice-6" />
-  </head>
-  <body>
-    <main class="app" id="app" data-mode="locked">
-      <section class="unlock" id="unlockView" aria-labelledby="unlockTitle">
-        <div class="identity" aria-hidden="true">
-          <span class="identity-mark"></span>
-          <span>RAT</span>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src https://crs-machines-mac-studio.taild8d202.ts.net; media-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
+  >
+  <title>RAT Council</title>
+  <meta
+    name="description"
+    content="A password-protected speech interface for a private local model council."
+  >
+  <link rel="stylesheet" href="./styles.css?v=rat-council-1">
+</head>
+<body>
+  <div class="wash wash-a"></div>
+  <div class="wash wash-b"></div>
+
+  <main id="loginView" class="login-shell">
+    <section class="login-card" aria-labelledby="loginTitle">
+      <div class="identity" aria-hidden="true">
+        <span class="identity-mark"></span>
+        <span>RAT COUNCIL</span>
+      </div>
+      <form id="loginForm" class="login-form" autocomplete="off">
+        <p class="eyebrow">PRIVATE LOCAL COUNCIL</p>
+        <h1 id="loginTitle">Wake the council.</h1>
+        <p class="login-copy">The models and conversation stay on the Mac Studio.</p>
+        <label>
+          <span>Password</span>
+          <input
+            id="passwordInput"
+            type="password"
+            required
+            autocomplete="off"
+            autofocus
+            aria-describedby="loginStatus"
+          >
+        </label>
+        <button id="loginButton" type="submit">Enter</button>
+        <p id="loginStatus" class="login-status" role="status">
+          Secure gateway connection.
+        </p>
+      </form>
+    </section>
+  </main>
+
+  <div id="councilView" hidden>
+    <header class="voice-topbar">
+      <button id="logoutButton" class="logout-button" type="button">Lock</button>
+      <div class="voice-brand">
+        <span class="voice-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div><p>RAT COUNCIL</p><h1>Talk with the council</h1></div>
+      </div>
+      <div class="runtime-state">
+        <span id="runtimeDot"></span><strong id="runtimeLabel">Waking…</strong>
+      </div>
+    </header>
+
+    <main class="voice-workspace">
+      <section class="conversation-card">
+        <header class="conversation-heading">
+          <div><p class="eyebrow">VOICE SESSION</p><h2 id="phaseTitle">Preparing local speech</h2></div>
+          <span id="phaseBadge">WAKING</span>
+        </header>
+
+        <div id="conversationLog" class="conversation-log" aria-live="polite">
+          <div id="emptyConversation" class="empty-conversation">
+            <strong>Hold the circle and speak.</strong>
+            <p>Talkie answers first. GPT-OSS decides whether the thought warrants the full council.</p>
+          </div>
         </div>
 
-        <form class="unlock-form" id="gatewayLoginForm" autocomplete="off">
-          <h1 id="unlockTitle">Wake RAT.</h1>
-          <label>
-            <span>Endpoint</span>
-            <input
-              id="gatewayUrl"
-              type="url"
-              inputmode="url"
-              required
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="https://your-machine.example"
-            />
-          </label>
-          <label>
-            <span>Password</span>
-            <input
-              id="gatewayPassword"
-              type="password"
-              required
-              autocomplete="off"
-            />
-          </label>
-          <button id="gatewayLoginButton" type="submit">Begin</button>
-          <p class="unlock-status" id="gatewayStatus" role="status">
-            Nothing leaves your chosen gateway.
+        <div class="speech-surface">
+          <button
+            id="speechButton"
+            class="speech-button"
+            type="button"
+            disabled
+            aria-label="Hold to speak"
+            aria-pressed="false"
+          >
+            <canvas id="waveformCanvas" aria-hidden="true"></canvas>
+            <span class="button-core">
+              <strong id="buttonLabel">Waking speech…</strong>
+              <small id="buttonHint">Connecting to the Mac Studio</small>
+            </span>
+          </button>
+          <p id="statusMessage" class="status-message">
+            Loading Parakeet and Chatterbox Turbo MLX…
           </p>
-        </form>
+        </div>
+
+        <section id="decisionPanel" class="decision-panel" hidden>
+          <div>
+            <strong>Deeper consideration paused</strong>
+            <p>Answer by voice, or choose directly.</p>
+          </div>
+          <div class="decision-actions">
+            <button id="stopThinkingButton" class="quiet" type="button">Stop</button>
+            <button id="continueThinkingButton" class="primary" type="button">Continue</button>
+          </div>
+        </section>
       </section>
 
-      <section class="conversation" id="conversationView" aria-labelledby="conversationTitle" hidden>
-        <h1 class="visually-hidden" id="conversationTitle">Conversation with RAT</h1>
-        <button
-          class="waveform-surface"
-          id="waveformSurface"
-          type="button"
-          aria-label="Hold to speak"
-          aria-pressed="false"
-        >
-          <canvas id="waveformCanvas" aria-hidden="true"></canvas>
-          <span class="hold-label" id="holdLabel" aria-hidden="true">Hold to speak</span>
-          <span class="visually-hidden" id="waveformAction">Hold to speak</span>
-        </button>
-        <p class="conversation-status" id="conversationStatus" aria-live="polite">ready</p>
-        <p class="conversation-message" id="conversationMessage" role="status" aria-live="polite"></p>
-
-        <form class="text-composer" id="textComposer" hidden>
-          <label class="visually-hidden" for="textInput">Type to RAT</label>
-          <input id="textInput" autocomplete="off" placeholder="Say it in text…" />
-        </form>
-      </section>
+      <aside class="voice-notes">
+        <article>
+          <p class="eyebrow">THREE TEMPOS</p>
+          <ol>
+            <li><span>01</span><div><strong>Immediate</strong><p>Talkie responds conversationally through Chatterbox.</p></div></li>
+            <li><span>02</span><div><strong>Considered</strong><p>Only warranted turns enter the unchanged RAT council.</p></div></li>
+            <li><span>03</span><div><strong>Verbatim</strong><p>The final Talkie rendering is displayed and spoken word for word.</p></div></li>
+          </ol>
+        </article>
+        <article class="audit-note">
+          <p class="eyebrow">VISIBLE, NOT HIDDEN</p>
+          <p>Spoken progress describes public pipeline stages in broad strokes. It does not expose or claim private chain-of-thought.</p>
+        </article>
+        <article class="model-note">
+          <span>ASR</span><strong>Parakeet 110M</strong>
+          <span>VOICE</span><strong>Chatterbox Turbo MLX</strong>
+          <span>ROUTER</span><strong>GPT-OSS 20B</strong>
+          <span>COMPANION</span><strong>Talkie 1930 13B</strong>
+        </article>
+      </aside>
     </main>
+  </div>
 
-    <script src="./app.js?v=rat-voice-6" defer></script>
-  </body>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="./app.js?v=rat-council-1" defer></script>
+</body>
 </html>

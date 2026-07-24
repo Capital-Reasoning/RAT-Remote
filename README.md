@@ -1,33 +1,45 @@
-# RAT Remote
+# RAT Council Remote
 
-RAT Remote is the static browser interface for a privately operated RAT planning and voice engine.
+RAT Council Remote is the public static doorway to a privately operated local
+model council. The page asks only for a password. Successful authentication
+reveals the hold-to-talk Council interface.
 
-This public repository intentionally contains only the HTML, CSS, and JavaScript needed to render the interface. It contains no backend source, model configuration, provider credentials, password material, project documents, project bundles, private hostnames, private IP addresses, or history from the private engine repository.
+This repository intentionally contains only HTML, CSS, JavaScript, and public
+connection metadata. It contains no password, password hash, bearer session,
+model, prompt configuration, run history, generated audio, transcript, or
+Council data.
 
 ## Security boundary
 
-The public page is not the security boundary. The local gateway is responsible for authentication, authorization, rate limiting, HTTPS, CORS, and storage. RAT Remote sends a password only to the user-entered HTTPS gateway and keeps the returned session bearer in JavaScript memory. It does not accept credentials in URL parameters and does not persist the gateway URL, session bearer, or active project identifier in browser storage.
+GitHub Pages serves public static files, so the page source itself is not
+secret. Access control is enforced by the HTTPS gateway on the model machine:
 
-The page has no third-party scripts, analytics, fonts, images, package dependencies, service worker, or public backend. Project documents and audio travel directly between the browser and the authenticated gateway selected by the user.
+- password verification uses a locally stored salted scrypt credential;
+- successful login creates a random twelve-hour bearer held only in JavaScript
+  memory;
+- five failed logins within five minutes lock that client out for fifteen
+  minutes;
+- the gateway accepts browser requests only from the exact GitHub Pages
+  origin;
+- only the Council speech endpoints are proxied;
+- reloading, closing, or locking the page discards the browser session.
+
+The public Tailscale Funnel hostname is routing information, not a credential.
+The gateway still requires authentication for every private Council request.
 
 ## Conversation flow
 
-Endpoint and password are the entire visible setup. After authentication, RAT selects the most recent local project (or creates a `Voice conversation`) and reduces to one live waveform. Hold the waveform to open the microphone; releasing it closes the microphone and submits the utterance. Pressing `/` while the waveform is focused reveals text input only when needed.
+After login, hold the central circle while speaking and release it to send.
+Parakeet transcribes locally, Talkie answers immediately through Chatterbox
+Turbo MLX, and GPT-OSS decides whether the utterance warrants the full Council.
+Deeper turns receive concise spoken stage updates and finish with the normal
+pipeline's Talkie output verbatim.
 
-Completed utterances go directly to the authenticated gateway over HTTPS. A small local mull model first reflects the tail of the utterance while the planning model selects one high-value Socratic question. The main answer follows in the selected local RAT voice. Response text remains in an assistive live region rather than a permanent transcript panel. The public page does not use a cloud or browser speech provider.
-
-Never commit credentials, endpoint inventories, project exports, or user documents to this repository.
-
-## Files intentionally published
-
-- `index.html`
-- `styles.css`
-- `app.js`
-- `.nojekyll`
-- `README.md`
-- `SECURITY.md`
-- `LICENSE`
+The public page never uses cloud speech recognition, cloud synthesis,
+analytics, third-party scripts, or browser storage.
 
 ## Deployment
 
-GitHub Pages publishes the repository root from the `main` branch. The local RAT engine must be running separately behind an HTTPS endpoint that permits this Pages origin.
+GitHub Pages publishes the repository root from `main`. The private Council
+Studio and authenticated Funnel gateway must be running separately on the Mac
+Studio.

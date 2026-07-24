@@ -1,31 +1,44 @@
+"use strict";
+
+const GATEWAY_ORIGIN = "https://crs-machines-mac-studio.taild8d202.ts.net";
+const $ = (selector) => document.querySelector(selector);
+
 const ui = {
-  app: document.querySelector("#app"),
-  unlockView: document.querySelector("#unlockView"),
-  conversationView: document.querySelector("#conversationView"),
-  gatewayLoginForm: document.querySelector("#gatewayLoginForm"),
-  gatewayUrl: document.querySelector("#gatewayUrl"),
-  gatewayPassword: document.querySelector("#gatewayPassword"),
-  gatewayLoginButton: document.querySelector("#gatewayLoginButton"),
-  gatewayStatus: document.querySelector("#gatewayStatus"),
-  waveformSurface: document.querySelector("#waveformSurface"),
-  waveformCanvas: document.querySelector("#waveformCanvas"),
-  waveformAction: document.querySelector("#waveformAction"),
-  holdLabel: document.querySelector("#holdLabel"),
-  conversationStatus: document.querySelector("#conversationStatus"),
-  conversationMessage: document.querySelector("#conversationMessage"),
-  textComposer: document.querySelector("#textComposer"),
-  textInput: document.querySelector("#textInput"),
+  loginView: $("#loginView"),
+  councilView: $("#councilView"),
+  loginForm: $("#loginForm"),
+  passwordInput: $("#passwordInput"),
+  loginButton: $("#loginButton"),
+  loginStatus: $("#loginStatus"),
+  logoutButton: $("#logoutButton"),
+  runtimeDot: $("#runtimeDot"),
+  runtimeLabel: $("#runtimeLabel"),
+  phaseTitle: $("#phaseTitle"),
+  phaseBadge: $("#phaseBadge"),
+  conversationLog: $("#conversationLog"),
+  emptyConversation: $("#emptyConversation"),
+  speechButton: $("#speechButton"),
+  waveform: $("#waveformCanvas"),
+  buttonLabel: $("#buttonLabel"),
+  buttonHint: $("#buttonHint"),
+  status: $("#statusMessage"),
+  decisionPanel: $("#decisionPanel"),
+  continueButton: $("#continueThinkingButton"),
+  stopButton: $("#stopThinkingButton"),
+  toast: $("#toast"),
 };
 
 const gateway = {
-  apiBase: "",
   bearer: "",
   authenticated: false,
 };
 
 const state = {
+  sessionId: crypto.randomUUID(),
   phase: "locked",
-  projectId: "",
+  ready: false,
+  holdActive: false,
+  recording: false,
   audioContext: null,
   analyser: null,
   responseNode: null,
@@ -34,57 +47,29 @@ const state = {
   microphoneSource: null,
   processor: null,
   silentGain: null,
-  holdActive: false,
-  recording: false,
+  chunks: [],
   captureMs: 0,
-  utterance: [],
   inputLevel: 0,
-  processing: false,
-  requestController: null,
-  requestSerial: 0,
-  animationFrame: 0,
+  activeTurn: null,
+  polling: null,
+  playedAudio: new Set(),
+  queuedAudio: new Set(),
+  audioQueue: [],
+  playingQueue: false,
+  seenMessages: new Set(),
 };
 
-function normalizeGatewayUrl(value) {
-  const url = new URL(value);
-  const localHost = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && localHost)) {
-    throw new Error("The endpoint must use HTTPS.");
-  }
-  if (url.username || url.password) {
-    throw new Error("Keep credentials out of the endpoint URL.");
-  }
-  return url.origin;
+function toast(message, error = false) {
+  ui.toast.textContent = message;
+  ui.toast.classList.toggle("error", error);
+  ui.toast.classList.add("visible");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => ui.toast.classList.remove("visible"), 4200);
 }
 
-function setUnlockStatus(message, status = "quiet") {
-  ui.gatewayStatus.textContent = message;
-  ui.gatewayStatus.dataset.state = status;
-}
-
-function setConversationMessage(message = "", status = "quiet") {
-  ui.conversationMessage.textContent = message;
-  ui.conversationMessage.dataset.state = status;
-}
-
-function setPhase(phase, message = "") {
-  state.phase = phase;
-  ui.app.dataset.mode = phase;
-  const labels = {
-    waking: "waking",
-    ready: "ready",
-    listening: "listening",
-    thinking: "thinking",
-    speaking: "speaking",
-    error: "try again",
-  };
-  ui.conversationStatus.textContent = labels[phase] || phase;
-  if (message) setConversationMessage(message, phase === "error" ? "error" : "quiet");
-  const action = state.holdActive ? "Release to send" : "Hold to speak";
-  ui.waveformSurface.setAttribute("aria-label", action);
-  ui.waveformSurface.setAttribute("aria-pressed", String(state.holdActive));
-  ui.waveformAction.textContent = action;
-  ui.holdLabel.textContent = action;
+function setLoginStatus(message, error = false) {
+  ui.loginStatus.textContent = message;
+  ui.loginStatus.classList.toggle("error", error);
 }
 
 function gatewayHeaders(existing = {}) {
@@ -94,102 +79,222 @@ function gatewayHeaders(existing = {}) {
 }
 
 async function gatewayFetch(path, options = {}) {
-  if (!gateway.authenticated || !gateway.apiBase) {
-    throw new Error("RAT is locked.");
-  }
-  const response = await fetch(`${gateway.apiBase}${path}`, {
+  if (!gateway.authenticated || !gateway.bearer) throw new Error("RAT is locked.");
+  const response = await fetch(`${GATEWAY_ORIGIN}${path}`, {
     ...options,
     headers: gatewayHeaders(options.headers || {}),
   });
   if (response.status === 401) {
-    await lockConversation(false);
-    setUnlockStatus("The session expired. Enter the password again.", "error");
+    lockCouncil(false);
+    setLoginStatus("The session expired. Enter the password again.", true);
   }
   return response;
 }
 
-async function responseError(response, fallback) {
-  const body = (await response.text()).trim();
-  try {
-    return JSON.parse(body).error || body || fallback;
-  } catch (_error) {
-    return body || fallback;
-  }
+async function responseBody(response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("json")) return response.json();
+  return response.text();
 }
 
-async function selectConversationProject() {
-  const response = await gatewayFetch("/api/projects");
-  if (!response.ok) throw new Error(await responseError(response, "Could not load a conversation."));
-  const projects = (await response.json()).projects || [];
-  let projectId = projects[0]?.id || "";
-
-  if (!projectId) {
-    const created = await gatewayFetch("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: "Voice conversation",
-        initial_idea: "",
-        data_policy: "LOCAL_ONLY",
-      }),
-    });
-    if (!created.ok) throw new Error(await responseError(created, "Could not begin a conversation."));
-    projectId = (await created.json()).project.id;
+async function api(path, options = {}) {
+  const response = await gatewayFetch(path, options);
+  const body = await responseBody(response);
+  if (!response.ok) {
+    const message = typeof body === "object" ? body.detail || body.error : body;
+    throw new Error(message || `Request failed (${response.status})`);
   }
-
-  const selected = await gatewayFetch(`/api/projects/${encodeURIComponent(projectId)}/select`, {
-    method: "POST",
-  });
-  if (!selected.ok) throw new Error(await responseError(selected, "Could not select the conversation."));
-  state.projectId = projectId;
+  return body;
 }
 
-async function loginGateway(event) {
+async function login(event) {
   event.preventDefault();
-  ui.gatewayLoginButton.disabled = true;
-  setUnlockStatus("Waking the local model…");
+  ui.loginButton.disabled = true;
+  setLoginStatus("Waking the local council…");
   try {
-    const apiBase = normalizeGatewayUrl(ui.gatewayUrl.value.trim());
-    const response = await fetch(`${apiBase}/api/auth/login`, {
+    const response = await fetch(`${GATEWAY_ORIGIN}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: ui.gatewayPassword.value }),
+      body: JSON.stringify({ password: ui.passwordInput.value }),
     });
-    ui.gatewayPassword.value = "";
+    ui.passwordInput.value = "";
+    const body = await responseBody(response);
     if (!response.ok) {
-      throw new Error(await responseError(response, `Login failed (${response.status}).`));
+      const message = typeof body === "object" ? body.error || body.detail : body;
+      throw new Error(message || `Login failed (${response.status}).`);
     }
-    const payload = await response.json();
-    gateway.apiBase = apiBase;
-    gateway.bearer = payload.token;
+    gateway.bearer = body.token;
     gateway.authenticated = true;
-    ui.unlockView.hidden = true;
-    ui.conversationView.hidden = false;
-    setPhase("waking");
-    await selectConversationProject();
-    setConversationMessage("");
-    setPhase("ready");
-    ui.waveformSurface.focus({ preventScroll: true });
+    state.sessionId = crypto.randomUUID();
+    ui.loginView.hidden = true;
+    ui.councilView.hidden = false;
+    await warmVoice();
+    ui.speechButton.focus({ preventScroll: true });
   } catch (error) {
-    ui.gatewayPassword.value = "";
-    if (!gateway.authenticated) {
-      ui.unlockView.hidden = false;
-      ui.conversationView.hidden = true;
-      ui.gatewayLoginButton.disabled = false;
-      const message = error instanceof TypeError
-        ? "The gateway could not be reached. Check the endpoint and try again."
-        : error.message || String(error);
-      setUnlockStatus(message, "error");
-      return;
+    gateway.bearer = "";
+    gateway.authenticated = false;
+    ui.passwordInput.value = "";
+    setLoginStatus(
+      error instanceof TypeError
+        ? "The secure gateway is offline. Try again shortly."
+        : error.message || String(error),
+      true,
+    );
+    ui.passwordInput.focus();
+  } finally {
+    ui.loginButton.disabled = false;
+  }
+}
+
+async function lockCouncil(callGateway = true) {
+  if (callGateway && gateway.authenticated) {
+    try {
+      await gatewayFetch("/api/auth/logout", { method: "POST" });
+    } catch (_error) {
+      // Locking this browser session remains authoritative.
     }
-    setPhase("error", `${error.message || error} Hold to retry.`);
+  }
+  clearTimeout(state.polling);
+  state.polling = null;
+  state.holdActive = false;
+  stopMicrophone();
+  stopPlayback(true);
+  gateway.bearer = "";
+  gateway.authenticated = false;
+  state.ready = false;
+  state.activeTurn = null;
+  state.phase = "locked";
+  state.playedAudio.clear();
+  state.queuedAudio.clear();
+  state.seenMessages.clear();
+  ui.conversationLog.querySelectorAll(".message").forEach((message) => message.remove());
+  ui.emptyConversation.hidden = false;
+  ui.runtimeDot.classList.remove("online");
+  ui.runtimeLabel.textContent = "Locked";
+  ui.councilView.hidden = true;
+  ui.loginView.hidden = false;
+  setLoginStatus("Secure gateway connection.");
+  ui.passwordInput.value = "";
+  ui.passwordInput.focus();
+}
+
+function activeDeepThought() {
+  return ["queued", "running"].includes(state.activeTurn?.status);
+}
+
+function setPhase(phase, message = "") {
+  state.phase = phase;
+  const details = {
+    waking: ["Preparing local speech", "WAKING"],
+    ready: ["Ready when you are", "READY"],
+    listening: ["Listening", "LISTENING"],
+    routing: ["Talkie has answered", "ROUTING"],
+    thinking: ["The council is considering it", "THINKING"],
+    speaking: ["Speaking", "SPEAKING"],
+    paused: ["Deeper consideration paused", "PAUSED"],
+    error: ["Something needs attention", "ERROR"],
+  };
+  const [title, badge] = details[phase] || details.ready;
+  ui.phaseTitle.textContent = title;
+  ui.phaseBadge.textContent = badge;
+  if (message) ui.status.textContent = message;
+  updateButton();
+}
+
+function updateButton() {
+  const paused = state.activeTurn?.status === "paused";
+  const interruptible = activeDeepThought();
+  ui.speechButton.disabled = !state.ready;
+  ui.speechButton.classList.toggle("listening", state.holdActive);
+  ui.speechButton.classList.toggle("interrupt", interruptible);
+  ui.speechButton.setAttribute("aria-pressed", String(state.holdActive));
+  if (!state.ready) {
+    ui.buttonLabel.textContent = "Waking speech…";
+    ui.buttonHint.textContent = "Connecting to the Mac Studio";
+  } else if (state.holdActive) {
+    ui.buttonLabel.textContent = "Release to send";
+    ui.buttonHint.textContent = `${Math.max(0, state.captureMs / 1000).toFixed(1)} seconds`;
+  } else if (interruptible) {
+    ui.buttonLabel.textContent = "Tap to interrupt";
+    ui.buttonHint.textContent = "The council will pause";
+  } else if (paused) {
+    ui.buttonLabel.textContent = "Hold to answer";
+    ui.buttonHint.textContent = "Say continue or stop";
+  } else {
+    ui.buttonLabel.textContent = "Hold to speak";
+    ui.buttonHint.textContent = "Release when finished";
+  }
+  ui.speechButton.setAttribute(
+    "aria-label",
+    interruptible ? "Interrupt deeper consideration" : "Hold to speak",
+  );
+  ui.decisionPanel.hidden = !paused;
+}
+
+function appendMessage(key, role, label, text, kind = "") {
+  if (!text || state.seenMessages.has(key)) return;
+  state.seenMessages.add(key);
+  ui.emptyConversation.hidden = true;
+  const item = document.createElement("article");
+  item.className = `message ${role} ${kind}`.trim();
+  const heading = document.createElement("small");
+  heading.textContent = label;
+  const copy = document.createElement("p");
+  copy.textContent = text;
+  item.append(heading, copy);
+  ui.conversationLog.append(item);
+  ui.conversationLog.scrollTop = ui.conversationLog.scrollHeight;
+}
+
+function renderTurn(turn) {
+  state.activeTurn = turn;
+  appendMessage(`${turn.id}:user`, "user", "You", turn.transcript);
+  for (const event of turn.events || []) {
+    const labels = {
+      immediate: "Talkie · immediate",
+      progress: "Council · broad progress",
+      final: "Talkie · final verbatim",
+      decision: "Talkie",
+      route: "GPT-OSS · routing",
+      cancelled: "Council",
+      error: "Council",
+    };
+    const kind = event.kind === "final"
+      ? "final"
+      : event.kind === "progress"
+        ? "progress"
+        : "";
+    appendMessage(
+      `${turn.id}:event:${event.id}`,
+      "assistant",
+      labels[event.kind] || event.kind,
+      event.text,
+      kind,
+    );
+    if (event.audio_url) queueAudio(event.audio_url);
+  }
+  if (turn.status === "paused") {
+    setPhase("paused", "Answer by voice or choose below.");
+  } else if (["queued", "running"].includes(turn.status)) {
+    setPhase("thinking", "Tap the circle once if you want to interrupt.");
+  } else if (turn.status === "routing") {
+    setPhase("routing", "GPT-OSS is deciding whether this needs deeper consideration.");
+  } else if (turn.status === "error") {
+    setPhase("error", turn.error || "The voice turn failed.");
+  } else if (!state.playingQueue && !state.holdActive) {
+    setPhase(
+      "ready",
+      turn.status === "cancelled"
+        ? "The deeper consideration was stopped."
+        : "Hold to speak again.",
+    );
   }
 }
 
 async function ensureAudioContext() {
   if (!state.audioContext || state.audioContext.state === "closed") {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) throw new Error("This browser cannot run the voice interface.");
+    if (!AudioContextClass) throw new Error("This browser cannot run the speech interface.");
     state.audioContext = new AudioContextClass();
     state.analyser = state.audioContext.createAnalyser();
     state.analyser.fftSize = 1024;
@@ -197,12 +302,6 @@ async function ensureAudioContext() {
     state.analyser.connect(state.audioContext.destination);
   }
   if (state.audioContext.state === "suspended") await state.audioContext.resume();
-}
-
-function resetCapture() {
-  state.captureMs = 0;
-  state.utterance = [];
-  state.inputLevel = 0;
 }
 
 function cloneSamples(samples) {
@@ -220,10 +319,10 @@ function rootMeanSquare(samples) {
 function captureAudio(event) {
   if (!state.recording || !state.holdActive) return;
   const copy = cloneSamples(event.inputBuffer.getChannelData(0));
-  state.utterance.push(copy);
+  state.chunks.push(copy);
   state.captureMs += (copy.length / state.audioContext.sampleRate) * 1000;
-  const level = rootMeanSquare(copy);
-  state.inputLevel = state.inputLevel * 0.72 + level * 0.28;
+  state.inputLevel = state.inputLevel * 0.72 + rootMeanSquare(copy) * 0.28;
+  updateButton();
 }
 
 function concatenateChunks(chunks) {
@@ -251,6 +350,12 @@ function resample(samples, sourceRate, targetRate = 16_000) {
   return output;
 }
 
+function resetCapture() {
+  state.chunks = [];
+  state.captureMs = 0;
+  state.inputLevel = 0;
+}
+
 function stopMicrophone() {
   state.recording = false;
   if (state.processor) state.processor.onaudioprocess = null;
@@ -266,7 +371,7 @@ function stopMicrophone() {
 
 async function startMicrophone() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Microphone access is unavailable in this browser.");
+    throw new Error("Microphone access is unavailable.");
   }
   resetCapture();
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -294,55 +399,101 @@ async function startMicrophone() {
   state.recording = true;
 }
 
-function cancelCurrentResponse() {
-  state.requestSerial += 1;
-  state.requestController?.abort();
-  state.requestController = null;
-  state.processing = false;
-}
-
-function stopPlayback() {
+function stopPlayback(clearQueue = false) {
+  if (clearQueue) state.audioQueue = [];
   const node = state.responseNode;
   const resolve = state.responseResolve;
   state.responseNode = null;
   state.responseResolve = null;
-  if (!node) {
-    resolve?.(false);
-    return;
+  if (node) {
+    node.onended = null;
+    try { node.stop(); } catch (_error) {}
+    node.disconnect();
   }
-  node.onended = null;
-  try {
-    node.stop();
-  } catch (_error) {
-    // The source may already have ended.
-  }
-  node.disconnect();
   resolve?.(false);
 }
 
+function queueAudio(url) {
+  if (!url || state.playedAudio.has(url) || state.queuedAudio.has(url)) return;
+  state.queuedAudio.add(url);
+  state.audioQueue.push(url);
+  void playNextAudio();
+}
+
+async function playNextAudio() {
+  if (state.playingQueue || state.holdActive || !state.audioQueue.length) return;
+  state.playingQueue = true;
+  const url = state.audioQueue.shift();
+  try {
+    await ensureAudioContext();
+    const response = await gatewayFetch(url);
+    if (!response.ok) throw new Error("Generated speech could not be loaded.");
+    const decoded = await state.audioContext.decodeAudioData(await response.arrayBuffer());
+    if (state.holdActive) return;
+    stopPlayback();
+    const node = state.audioContext.createBufferSource();
+    node.buffer = decoded;
+    node.connect(state.analyser);
+    state.responseNode = node;
+    setPhase("speaking", "Tap the circle to stop speech and pause deeper consideration.");
+    await new Promise((resolve) => {
+      state.responseResolve = resolve;
+      node.onended = () => {
+        if (state.responseNode === node) {
+          state.responseNode = null;
+          state.responseResolve = null;
+          node.disconnect();
+        }
+        resolve(true);
+      };
+      node.start();
+    });
+    state.playedAudio.add(url);
+  } catch (error) {
+    toast(error.message || String(error), true);
+  } finally {
+    state.queuedAudio.delete(url);
+    state.playingQueue = false;
+    if (state.audioQueue.length) void playNextAudio();
+    else if (!state.holdActive && state.activeTurn) renderTurn(state.activeTurn);
+  }
+}
+
+async function interruptThought() {
+  if (!activeDeepThought()) return;
+  stopPlayback(true);
+  try {
+    const payload = await api(
+      `/api/voice/turns/${state.activeTurn.id}/interrupt`,
+      { method: "POST" },
+    );
+    renderTurn(payload.turn);
+    if (payload.event?.audio_url) queueAudio(payload.event.audio_url);
+  } catch (error) {
+    toast(error.message || String(error), true);
+  }
+}
+
 async function beginHold(event) {
-  if (!gateway.authenticated || state.holdActive) return;
+  if (!state.ready || state.holdActive) return;
   event?.preventDefault();
+  if (activeDeepThought()) {
+    await interruptThought();
+    return;
+  }
   if (event?.pointerId !== undefined) {
-    try {
-      ui.waveformSurface.setPointerCapture(event.pointerId);
-    } catch (_error) {
-      // Pointer capture is optional; global release listeners remain active.
-    }
+    try { ui.speechButton.setPointerCapture(event.pointerId); } catch (_error) {}
   }
   state.holdActive = true;
-  cancelCurrentResponse();
   stopPlayback();
-  setConversationMessage("");
-  setPhase("listening");
+  setPhase("listening", "Release when you have finished.");
   try {
-    // Resuming audio inside this gesture lets Safari play RAT's later response.
     await ensureAudioContext();
-    if (!state.holdActive) return;
-    await startMicrophone();
+    if (state.holdActive) await startMicrophone();
   } catch (error) {
+    state.holdActive = false;
     stopMicrophone();
-    if (state.holdActive) setPhase("error", `${error.message || error} Hold to retry.`);
+    setPhase("error", error.message || String(error));
   }
 }
 
@@ -350,194 +501,82 @@ async function endHold(event) {
   if (!state.holdActive) return;
   event?.preventDefault();
   state.holdActive = false;
-  const chunks = state.utterance;
+  const chunks = state.chunks;
   const captureMs = state.captureMs;
   const sourceRate = state.audioContext?.sampleRate || 16_000;
   const wasRecording = state.recording;
   stopMicrophone();
   resetCapture();
-  setPhase("ready");
   if (!wasRecording || captureMs < 250 || !chunks.length) {
-    if (wasRecording) setConversationMessage("Hold a little longer, then release.");
+    setPhase("ready", "Hold a little longer, then release.");
     return;
   }
-  const utterance = resample(concatenateChunks(chunks), sourceRate);
-  await sendUtterance(utterance);
-}
-
-function decodeBase64Audio(value) {
-  const binary = window.atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new Blob([bytes], { type: "audio/wav" });
-}
-
-async function playAudio(blob, requestId = state.requestSerial, endingPhase = "ready") {
-  await ensureAudioContext();
-  const encoded = await blob.arrayBuffer();
-  const decoded = await state.audioContext.decodeAudioData(encoded);
-  if (requestId !== state.requestSerial || state.holdActive) return false;
-  stopPlayback();
-  const node = state.audioContext.createBufferSource();
-  node.buffer = decoded;
-  node.connect(state.analyser);
-  state.responseNode = node;
-  return new Promise((resolve) => {
-    state.responseResolve = resolve;
-    node.onended = () => {
-      if (state.responseNode !== node) return;
-      state.responseNode = null;
-      state.responseResolve = null;
-      node.disconnect();
-      if (!state.holdActive) setPhase(endingPhase);
-      resolve(true);
-    };
-    setPhase("speaking");
-    node.start();
-  });
+  await sendUtterance(resample(concatenateChunks(chunks), sourceRate));
 }
 
 async function sendUtterance(samples) {
-  const requestId = state.requestSerial + 1;
-  state.requestSerial = requestId;
-  const controller = new AbortController();
-  state.requestController = controller;
-  state.processing = true;
-  setPhase("thinking");
+  ui.speechButton.disabled = true;
+  setPhase("routing", "Transcribing locally, then asking Talkie…");
   try {
-    const mullResponse = await gatewayFetch("/api/mull", {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: samples.buffer,
-      signal: controller.signal,
-    });
-    if (requestId !== state.requestSerial) return;
-    if (!mullResponse.ok) {
-      throw new Error(await responseError(mullResponse, "RAT did not understand that."));
-    }
-    const mull = await mullResponse.json();
-    if (requestId !== state.requestSerial) return;
-    ui.conversationMessage.textContent = mull.mull || "";
-
-    const mullPlayback = mull.audio_wav
-      ? playAudio(decodeBase64Audio(mull.audio_wav), requestId, "thinking")
-      : Promise.resolve(false);
-    const responseRequest = gatewayFetch("/api/respond", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transcript: mull.transcript }),
-      signal: controller.signal,
-    });
-    const [response] = await Promise.all([responseRequest, mullPlayback]);
-    if (requestId !== state.requestSerial) return;
-    if (!response.ok) {
-      throw new Error(await responseError(response, "RAT could not finish that thought."));
-    }
-    const payload = await response.json();
-    if (requestId !== state.requestSerial) return;
-    ui.conversationMessage.textContent = payload.response || "";
-    if (!payload.audio_wav) {
-      setPhase("ready");
-      return;
-    }
-    await playAudio(decodeBase64Audio(payload.audio_wav), requestId);
-  } catch (error) {
-    if (error.name === "AbortError" || requestId !== state.requestSerial) return;
-    const message = String(error.message || error);
-    if (message.includes("No speech detected")) {
-      stopPlayback();
-      setConversationMessage("");
-      setPhase("ready");
-    } else {
-      stopPlayback();
-      setPhase("error", `${message} Hold to try again.`);
-    }
-  } finally {
-    if (requestId === state.requestSerial) {
-      state.processing = false;
-      state.requestController = null;
-    }
-  }
-}
-
-async function speakText(text, requestId) {
-  const response = await gatewayFetch("/api/speech", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-    signal: state.requestController?.signal,
-  });
-  if (!response.ok) throw new Error(await responseError(response, "Speech synthesis failed."));
-  await playAudio(await response.blob(), requestId);
-}
-
-async function submitText(event) {
-  event.preventDefault();
-  const value = ui.textInput.value.trim();
-  if (!value || !state.projectId) return;
-  cancelCurrentResponse();
-  stopPlayback();
-  const requestId = state.requestSerial + 1;
-  state.requestSerial = requestId;
-  const controller = new AbortController();
-  state.requestController = controller;
-  ui.textInput.value = "";
-  ui.textComposer.hidden = true;
-  state.processing = true;
-  setPhase("thinking");
-  try {
-    const response = await gatewayFetch(
-      `/api/projects/${encodeURIComponent(state.projectId)}/turn`,
+    const payload = await api(
+      `/api/voice/utterances?session_id=${encodeURIComponent(state.sessionId)}`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: value }),
-        signal: controller.signal,
+        headers: { "Content-Type": "application/octet-stream" },
+        body: samples.buffer,
       },
     );
-    if (requestId !== state.requestSerial) return;
-    if (!response.ok) throw new Error(await responseError(response, "RAT could not respond."));
-    const turn = await response.json();
-    ui.conversationMessage.textContent = turn.spoken_response || "";
-    await speakText(turn.spoken_response, requestId);
+    renderTurn(payload.turn);
+    if (payload.event?.audio_url) queueAudio(payload.event.audio_url);
+    startPolling(payload.turn.id);
   } catch (error) {
-    if (error.name !== "AbortError" && requestId === state.requestSerial) {
-      setPhase("error", error.message || String(error));
-    }
+    setPhase("error", `${error.message || error} Hold to try again.`);
   } finally {
-    if (requestId === state.requestSerial) {
-      state.processing = false;
-      state.requestController = null;
-    }
+    ui.speechButton.disabled = false;
+    updateButton();
   }
 }
 
-async function lockConversation(callGateway = true) {
-  if (callGateway && gateway.authenticated) {
+function startPolling(turnId) {
+  clearTimeout(state.polling);
+  const poll = async () => {
     try {
-      await gatewayFetch("/api/auth/logout", { method: "POST" });
-    } catch (_error) {
-      // Local lock remains authoritative when the gateway cannot be reached.
+      const payload = await api(`/api/voice/turns/${turnId}`);
+      renderTurn(payload.turn);
+      if (["routing", "queued", "running", "paused"].includes(payload.turn.status)) {
+        state.polling = setTimeout(poll, 650);
+      }
+    } catch (error) {
+      toast(error.message || String(error), true);
     }
+  };
+  state.polling = setTimeout(poll, 350);
+}
+
+async function decide(continueThinking) {
+  if (!state.activeTurn) return;
+  ui.continueButton.disabled = true;
+  ui.stopButton.disabled = true;
+  try {
+    const payload = await api(`/api/voice/turns/${state.activeTurn.id}/decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ continue_thinking: continueThinking }),
+    });
+    renderTurn(payload.turn);
+    if (payload.event?.audio_url) queueAudio(payload.event.audio_url);
+    if (continueThinking) startPolling(payload.turn.id);
+  } catch (error) {
+    toast(error.message || String(error), true);
+  } finally {
+    ui.continueButton.disabled = false;
+    ui.stopButton.disabled = false;
   }
-  state.holdActive = false;
-  cancelCurrentResponse();
-  stopMicrophone();
-  stopPlayback();
-  gateway.bearer = "";
-  gateway.authenticated = false;
-  state.projectId = "";
-  state.phase = "locked";
-  ui.app.dataset.mode = "locked";
-  ui.conversationView.hidden = true;
-  ui.unlockView.hidden = false;
-  ui.gatewayLoginButton.disabled = false;
-  setUnlockStatus("Nothing leaves your chosen gateway.");
-  ui.gatewayPassword.focus();
 }
 
 function drawWaveform(time) {
-  const canvas = ui.waveformCanvas;
+  const canvas = ui.waveform;
+  if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const density = Math.min(2, window.devicePixelRatio || 1);
   const width = Math.max(1, Math.floor(rect.width * density));
@@ -549,94 +588,92 @@ function drawWaveform(time) {
   const context = canvas.getContext("2d");
   context.clearRect(0, 0, width, height);
   const center = height / 2;
-  const margin = width * 0.14;
+  const margin = width * 0.1;
   const span = width - margin * 2;
-  const points = 192;
+  const points = 150;
   let values = null;
   if (state.phase === "speaking" && state.analyser) {
     values = new Uint8Array(state.analyser.fftSize);
     state.analyser.getByteTimeDomainData(values);
   }
-
   context.beginPath();
   for (let index = 0; index < points; index += 1) {
     const progress = index / (points - 1);
-    const envelope = Math.sin(Math.PI * progress) ** 0.7;
-    let amplitude = 0;
+    const envelope = Math.sin(Math.PI * progress) ** 0.75;
+    let amplitude;
     if (values) {
-      const sample = values[Math.floor(progress * (values.length - 1))];
-      amplitude = ((sample - 128) / 128) * height * 0.38 * envelope;
-    } else if (state.phase === "thinking") {
-      amplitude = Math.sin(progress * 18 + time / 360) * height * 0.045 * envelope;
+      amplitude = ((values[Math.floor(progress * (values.length - 1))] - 128) / 128)
+        * height * 0.34 * envelope;
     } else if (state.phase === "listening") {
-      amplitude = Math.sin(progress * 24 + time / 120) * height
-        * Math.max(0.025, Math.min(0.18, state.inputLevel * 3.5)) * envelope;
+      amplitude = Math.sin(progress * 25 + time / 115) * height
+        * Math.max(0.025, Math.min(0.19, state.inputLevel * 3.8)) * envelope;
+    } else if (["thinking", "routing"].includes(state.phase)) {
+      amplitude = Math.sin(progress * 19 + time / 310) * height * 0.045 * envelope;
     } else {
-      amplitude = Math.sin(progress * 8 + time / 900) * height * 0.007 * envelope;
+      amplitude = Math.sin(progress * 9 + time / 850) * height * 0.009 * envelope;
     }
     const x = margin + progress * span;
     const y = center + amplitude;
     if (index === 0) context.moveTo(x, y);
     else context.lineTo(x, y);
   }
-  context.lineWidth = Math.max(1.25, density * 0.9);
+  context.lineWidth = Math.max(1.2, density);
   context.lineCap = "round";
-  context.lineJoin = "round";
   context.strokeStyle = state.phase === "error"
-    ? "rgba(255, 118, 95, 0.82)"
-    : ["listening", "speaking"].includes(state.phase)
-      ? "rgba(183, 255, 90, 0.96)"
-      : "rgba(236, 233, 223, 0.34)";
-  context.shadowBlur = ["listening", "speaking"].includes(state.phase) ? 20 * density : 0;
-  context.shadowColor = "rgba(183, 255, 90, 0.4)";
+    ? "rgba(255,139,128,.86)"
+    : state.phase === "paused"
+      ? "rgba(255,194,117,.9)"
+      : ["listening", "speaking"].includes(state.phase)
+        ? "rgba(216,255,114,.95)"
+        : "rgba(236,233,223,.28)";
   context.stroke();
-  state.animationFrame = window.requestAnimationFrame(drawWaveform);
+  window.requestAnimationFrame(drawWaveform);
 }
 
-ui.gatewayLoginForm.addEventListener("submit", loginGateway);
-ui.waveformSurface.addEventListener("pointerdown", beginHold);
-ui.waveformSurface.addEventListener("pointerup", endHold);
-ui.waveformSurface.addEventListener("pointercancel", endHold);
-ui.waveformSurface.addEventListener("lostpointercapture", endHold);
-ui.waveformSurface.addEventListener("contextmenu", (event) => event.preventDefault());
-ui.textComposer.addEventListener("submit", submitText);
-
-window.addEventListener("keydown", (event) => {
-  if (!gateway.authenticated) return;
-  if (event.key === "Escape") {
-    if (state.holdActive) endHold(event);
-    else if (!ui.textComposer.hidden) {
-      ui.textComposer.hidden = true;
-      ui.textInput.value = "";
-      ui.waveformSurface.focus();
-    } else {
-      lockConversation();
-    }
-    return;
+async function warmVoice() {
+  state.ready = false;
+  setPhase("waking", "Connecting to the local speech runtime…");
+  try {
+    const status = await api("/api/voice/warm", { method: "POST" });
+    state.ready = Boolean(status.ready);
+    ui.runtimeDot.classList.toggle("online", state.ready);
+    ui.runtimeLabel.textContent = state.ready ? "Speech ready" : "Speech unavailable";
+    setPhase("ready", "Hold the circle and speak naturally.");
+  } catch (error) {
+    state.ready = false;
+    ui.runtimeLabel.textContent = "Speech unavailable";
+    setPhase("error", error.message || String(error));
   }
-  if (event.key === "/" && ui.textComposer.hidden && document.activeElement === ui.waveformSurface) {
-    event.preventDefault();
-    ui.textComposer.hidden = false;
-    ui.textInput.focus();
-    return;
-  }
-  if ([" ", "Enter"].includes(event.key)
-      && document.activeElement === ui.waveformSurface
-      && !event.repeat) {
-    beginHold(event);
-  }
-});
+}
 
-window.addEventListener("keyup", (event) => {
-  if ([" ", "Enter"].includes(event.key) && state.holdActive) endHold(event);
-});
-
+ui.loginForm.addEventListener("submit", login);
+ui.logoutButton.addEventListener("click", () => lockCouncil());
+ui.speechButton.addEventListener("pointerdown", beginHold);
+ui.speechButton.addEventListener("pointerup", endHold);
+ui.speechButton.addEventListener("pointercancel", endHold);
+ui.speechButton.addEventListener("lostpointercapture", endHold);
+ui.speechButton.addEventListener("contextmenu", (event) => event.preventDefault());
+ui.continueButton.addEventListener("click", () => decide(true));
+ui.stopButton.addEventListener("click", () => decide(false));
+window.addEventListener("pointerup", endHold);
 window.addEventListener("blur", () => {
-  if (state.holdActive) endHold();
+  if (state.holdActive) void endHold();
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && gateway.authenticated) {
+    void lockCouncil();
+    return;
+  }
+  if (
+    [" ", "Enter"].includes(event.key)
+    && document.activeElement === ui.speechButton
+    && !event.repeat
+  ) {
+    void beginHold(event);
+  }
+});
+window.addEventListener("keyup", (event) => {
+  if ([" ", "Enter"].includes(event.key) && state.holdActive) void endHold(event);
 });
 
-const suggestedGateway = location.protocol === "https:" && location.hostname.endsWith("github.io")
-  ? ""
-  : location.origin;
-ui.gatewayUrl.value = suggestedGateway;
-state.animationFrame = window.requestAnimationFrame(drawWaveform);
+window.requestAnimationFrame(drawWaveform);
