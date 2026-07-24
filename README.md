@@ -36,6 +36,11 @@ MLX while GPT-OSS decides whether the utterance warrants the full Council.
 Deeper turns receive concise spoken stage updates and finish with the normal
 pipeline's Talkie output verbatim.
 
+The public conversation frames that work in Talkie's first person: “Let me
+consider that more deeply,” followed by broad summaries at stage changes and
+periodically during long stages. These summaries report public process state;
+they do not expose or claim a private chain-of-thought.
+
 Parakeet's acoustic alignment supplies word start/end milliseconds to the
 immediate Talkie prompt. A local timing planner distinguishes a clear handoff
 from an unfinished or reflective turn and supplies the desired reply gap. The

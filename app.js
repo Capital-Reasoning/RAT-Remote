@@ -216,7 +216,7 @@ function updateButton() {
     ui.buttonHint.textContent = `${Math.max(0, state.captureMs / 1000).toFixed(1)} seconds`;
   } else if (interruptible) {
     ui.buttonLabel.textContent = "Tap to interrupt";
-    ui.buttonHint.textContent = "The council will pause";
+    ui.buttonHint.textContent = "Deeper consideration will pause";
   } else if (paused) {
     ui.buttonLabel.textContent = "Hold to answer";
     ui.buttonHint.textContent = "Say continue or stop";
@@ -253,12 +253,12 @@ function renderTurn(turn) {
     const labels = {
       backchannel: "Talkie · listening",
       immediate: "Talkie · immediate",
-      progress: "Council · broad progress",
+      progress: "Talkie · considering",
       final: "Talkie · final verbatim",
       decision: "Talkie",
-      route: "GPT-OSS · routing",
-      cancelled: "Council",
-      error: "Council",
+      route: "Talkie · decision",
+      cancelled: "Talkie",
+      error: "Talkie",
     };
     const kind = event.kind === "final"
       ? "final"
@@ -279,9 +279,12 @@ function renderTurn(turn) {
   if (turn.status === "paused") {
     setPhase("paused", "Answer by voice or choose below.");
   } else if (["queued", "running"].includes(turn.status)) {
-    setPhase("thinking", "Tap the circle once if you want to interrupt.");
+    setPhase(
+      "thinking",
+      "I’m considering this more deeply. Tap once if you want to interrupt.",
+    );
   } else if (turn.status === "routing") {
-    setPhase("routing", "GPT-OSS is deciding whether this needs deeper consideration.");
+    setPhase("routing", "I’m deciding whether this needs deeper consideration.");
   } else if (turn.status === "error") {
     setPhase("error", turn.error || "The voice turn failed.");
   } else if (!state.playingQueue && !state.holdActive) {

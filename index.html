@@ -71,7 +71,7 @@
         <div id="conversationLog" class="conversation-log" aria-live="polite">
           <div id="emptyConversation" class="empty-conversation">
             <strong>Hold the circle and speak.</strong>
-            <p>Talkie acknowledges you immediately, then answers. GPT-OSS decides whether the thought warrants the full council.</p>
+            <p>Talkie acknowledges you immediately, then answers. When needed, it continues considering the thought in its own voice.</p>
           </div>
         </div>
 
@@ -112,13 +112,13 @@
           <p class="eyebrow">THREE TEMPOS</p>
           <ol>
             <li><span>01</span><div><strong>Immediate</strong><p>A cached listening cue plays first, then Talkie responds through Chatterbox.</p></div></li>
-            <li><span>02</span><div><strong>Considered</strong><p>Only warranted turns enter the unchanged RAT council.</p></div></li>
+            <li><span>02</span><div><strong>Considered</strong><p>For warranted turns, Talkie says it will consider them more deeply and narrates broad first-person summaries.</p></div></li>
             <li><span>03</span><div><strong>Verbatim</strong><p>The final Talkie rendering is displayed and spoken word for word.</p></div></li>
           </ol>
         </article>
         <article class="audit-note">
           <p class="eyebrow">VISIBLE, NOT HIDDEN</p>
-          <p>Spoken progress describes public pipeline stages in broad strokes. It does not expose or claim private chain-of-thought.</p>
+          <p>Talkie speaks broad first-person summaries of public pipeline progress. It does not expose or claim private chain-of-thought.</p>
         </article>
         <article class="model-note">
           <span>ASR</span><strong>Parakeet 110M</strong>
@@ -131,6 +131,6 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="./app.js?v=rat-council-3" defer></script>
+  <script src="./app.js?v=rat-council-4" defer></script>
 </body>
 </html>
