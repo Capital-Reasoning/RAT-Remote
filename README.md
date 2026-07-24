@@ -30,8 +30,9 @@ The gateway still requires authentication for every private Council request.
 ## Conversation flow
 
 After login, hold the central circle while speaking and release it to send.
-Parakeet transcribes locally, Talkie answers immediately through Chatterbox
-Turbo MLX, and GPT-OSS decides whether the utterance warrants the full Council.
+Parakeet transcribes locally, a cached context-sensitive Talkie backchannel plays
+without waiting for generation, then Talkie answers through Chatterbox Turbo
+MLX while GPT-OSS decides whether the utterance warrants the full Council.
 Deeper turns receive concise spoken stage updates and finish with the normal
 pipeline's Talkie output verbatim.
 

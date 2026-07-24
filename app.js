@@ -251,6 +251,7 @@ function renderTurn(turn) {
   appendMessage(`${turn.id}:user`, "user", "You", turn.transcript);
   for (const event of turn.events || []) {
     const labels = {
+      backchannel: "Talkie · listening",
       immediate: "Talkie · immediate",
       progress: "Council · broad progress",
       final: "Talkie · final verbatim",
@@ -261,8 +262,8 @@ function renderTurn(turn) {
     };
     const kind = event.kind === "final"
       ? "final"
-      : event.kind === "progress"
-        ? "progress"
+      : ["backchannel", "progress"].includes(event.kind)
+        ? event.kind
         : "";
     appendMessage(
       `${turn.id}:event:${event.id}`,
