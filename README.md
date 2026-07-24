@@ -35,6 +35,12 @@ Turbo MLX, and GPT-OSS decides whether the utterance warrants the full Council.
 Deeper turns receive concise spoken stage updates and finish with the normal
 pipeline's Talkie output verbatim.
 
+Parakeet's acoustic alignment supplies word start/end milliseconds to the
+immediate Talkie prompt. A local timing planner distinguishes a clear handoff
+from an unfinished or reflective turn and supplies the desired reply gap. The
+user can barge in on Talkie; the hold gesture remains an explicit user turn
+boundary rather than pretending to provide full-duplex model interruption.
+
 The public page never uses cloud speech recognition, cloud synthesis,
 analytics, third-party scripts, or browser storage.
 

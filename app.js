@@ -271,7 +271,9 @@ function renderTurn(turn) {
       event.text,
       kind,
     );
-    if (event.audio_url) queueAudio(event.audio_url);
+    if (event.audio_url) {
+      queueAudio(event.audio_url, event.playback_not_before_unix_ms || 0);
+    }
   }
   if (turn.status === "paused") {
     setPhase("paused", "Answer by voice or choose below.");
@@ -413,22 +415,27 @@ function stopPlayback(clearQueue = false) {
   resolve?.(false);
 }
 
-function queueAudio(url) {
+function queueAudio(url, notBeforeUnixMs = 0) {
   if (!url || state.playedAudio.has(url) || state.queuedAudio.has(url)) return;
   state.queuedAudio.add(url);
-  state.audioQueue.push(url);
+  state.audioQueue.push({ url, notBeforeUnixMs });
   void playNextAudio();
 }
 
 async function playNextAudio() {
   if (state.playingQueue || state.holdActive || !state.audioQueue.length) return;
   state.playingQueue = true;
-  const url = state.audioQueue.shift();
+  const item = state.audioQueue.shift();
+  const { url, notBeforeUnixMs } = item;
   try {
     await ensureAudioContext();
     const response = await gatewayFetch(url);
     if (!response.ok) throw new Error("Generated speech could not be loaded.");
     const decoded = await state.audioContext.decodeAudioData(await response.arrayBuffer());
+    const remainingDelay = Math.max(0, notBeforeUnixMs - Date.now());
+    if (remainingDelay) {
+      await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+    }
     if (state.holdActive) return;
     stopPlayback();
     const node = state.audioContext.createBufferSource();
