@@ -50,6 +50,15 @@ const state = {
   chunks: [],
   captureMs: 0,
   inputLevel: 0,
+  speechActive: false,
+  speechMs: 0,
+  silenceMs: 0,
+  noiseFloor: 0.004,
+  preRoll: [],
+  streamChunks: [],
+  streamSamples: 0,
+  streamUpload: Promise.resolve(),
+  awaitingResponse: false,
   activeTurn: null,
   polling: null,
   playedAudio: new Set(),
@@ -219,8 +228,10 @@ function updateButton() {
     ui.buttonLabel.textContent = "Waking speech…";
     ui.buttonHint.textContent = "Connecting to the Mac Studio";
   } else if (state.holdActive) {
-    ui.buttonLabel.textContent = "Release to send";
-    ui.buttonHint.textContent = `${Math.max(0, state.captureMs / 1000).toFixed(1)} seconds`;
+    ui.buttonLabel.textContent = state.speechActive ? "Hearing you" : "Mic on";
+    ui.buttonHint.textContent = state.awaitingResponse
+      ? "Listening resumes after the reply"
+      : "Tap to switch off";
   } else if (state.phase === "routing" && state.thoughtStartedAt) {
     ui.buttonLabel.textContent = "···";
     ui.buttonHint.textContent = "A quiet field between voices";
@@ -228,15 +239,15 @@ function updateButton() {
     ui.buttonLabel.textContent = "Tap to interrupt";
     ui.buttonHint.textContent = "Deeper consideration will pause";
   } else if (paused) {
-    ui.buttonLabel.textContent = "Hold to answer";
-    ui.buttonHint.textContent = "Say continue or stop";
+    ui.buttonLabel.textContent = "Mic off";
+    ui.buttonHint.textContent = "Tap on to answer";
   } else {
-    ui.buttonLabel.textContent = "Hold to speak";
-    ui.buttonHint.textContent = "Release when finished";
+    ui.buttonLabel.textContent = "Mic off";
+    ui.buttonHint.textContent = "Tap to switch on";
   }
   ui.speechButton.setAttribute(
     "aria-label",
-    interruptible ? "Interrupt deeper consideration" : "Hold to speak",
+    state.holdActive ? "Turn microphone off" : "Turn microphone on",
   );
   ui.decisionPanel.hidden = !paused;
 }
@@ -261,7 +272,8 @@ function renderTurn(turn) {
   appendMessage(`${turn.id}:user`, "user", "You", turn.transcript);
   for (const event of turn.events || []) {
     const labels = {
-      immediate: "Talkie · immediate",
+      backchannel: "Talkie",
+      immediate: "Talkie",
       progress: "Talkie · considering",
       final: "Talkie · final verbatim",
       decision: "Talkie",
@@ -274,9 +286,7 @@ function renderTurn(turn) {
       : event.kind === "progress"
         ? event.kind
         : "";
-    const immediateLabel = event.dialogue_source === "gpt-oss:20b_fallback"
-      ? "Immediate · OSS supervised"
-      : labels[event.kind] || event.kind;
+    const immediateLabel = labels[event.kind] || event.kind;
     const wordCount = String(event.text || "").trim().split(/\s+/).filter(Boolean).length;
     const harmonyName = wordCount > 5
       ? event.voice_effect?.progression_name
@@ -302,10 +312,10 @@ function renderTurn(turn) {
       "thinking",
       "I’m considering this more deeply. Tap once if you want to interrupt.",
     );
-  } else if (turn.status === "routing") {
-    setPhase("routing", state.thoughtStartedAt
-      ? "A harmonic field is moving with the cadence you left behind."
-      : "Holding a quiet field between voices.");
+  } else if (["routing", "responding"].includes(turn.status)) {
+    setPhase("routing", (turn.events || []).some((event) => event.kind === "backchannel")
+      ? "Talkie is staying with the thread."
+      : "Talkie is leaning in.");
   } else if (turn.status === "error") {
     stopThoughtSoundscape();
     setPhase("error", turn.error || "The voice turn failed.");
@@ -315,7 +325,7 @@ function renderTurn(turn) {
       "ready",
       turn.status === "cancelled"
         ? "The deeper consideration was stopped."
-        : "Hold to speak again.",
+        : "Tap once to open the microphone.",
     );
   }
 }
@@ -467,15 +477,6 @@ function startThoughtSoundscape(samples) {
   state.thoughtSoundscape = { master, sources };
 }
 
-function captureAudio(event) {
-  if (!state.recording || !state.holdActive) return;
-  const copy = cloneSamples(event.inputBuffer.getChannelData(0));
-  state.chunks.push(copy);
-  state.captureMs += (copy.length / state.audioContext.sampleRate) * 1000;
-  state.inputLevel = state.inputLevel * 0.72 + rootMeanSquare(copy) * 0.28;
-  updateButton();
-}
-
 function concatenateChunks(chunks) {
   const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
   const output = new Float32Array(length);
@@ -501,10 +502,123 @@ function resample(samples, sourceRate, targetRate = 16_000) {
   return output;
 }
 
+function queueStreamAudio(samples) {
+  if (!samples.length) return;
+  state.streamChunks.push(samples);
+  state.streamSamples += samples.length;
+  if (state.streamSamples >= 3_200) flushStreamAudio();
+}
+
+function flushStreamAudio() {
+  if (!state.streamSamples) return state.streamUpload;
+  const payload = concatenateChunks(state.streamChunks);
+  state.streamChunks = [];
+  state.streamSamples = 0;
+  state.streamUpload = state.streamUpload.then(async () => {
+    const partial = await api(
+      `/api/voice/streams/chunks?session_id=${encodeURIComponent(state.sessionId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: payload.buffer,
+      },
+    );
+    if (partial.partial_transcript && state.holdActive && !state.awaitingResponse) {
+      ui.status.textContent = `“${partial.partial_transcript}…”`;
+    }
+  }).catch((error) => {
+    state.awaitingResponse = false;
+    setPhase("error", error.message || String(error));
+  });
+  return state.streamUpload;
+}
+
+function resetSpeechSegment() {
+  state.speechActive = false;
+  state.speechMs = 0;
+  state.silenceMs = 0;
+  state.preRoll = [];
+  state.streamChunks = [];
+  state.streamSamples = 0;
+  state.captureMs = 0;
+}
+
+async function commitSpeechSegment() {
+  if (state.awaitingResponse || state.speechMs < 250) {
+    resetSpeechSegment();
+    return;
+  }
+  state.awaitingResponse = true;
+  state.speechActive = false;
+  updateButton();
+  flushStreamAudio();
+  await state.streamUpload;
+  try {
+    const payload = await api(
+      `/api/voice/streams/commit?session_id=${encodeURIComponent(state.sessionId)}`,
+      { method: "POST" },
+    );
+    renderTurn(payload.turn);
+    if (payload.event?.audio_url) queueAudio(payload.event.audio_url);
+    startPolling(payload.turn.id);
+  } catch (error) {
+    state.awaitingResponse = false;
+    setPhase("error", `${error.message || error} Keep the mic on to try again.`);
+  } finally {
+    resetSpeechSegment();
+    updateButton();
+  }
+}
+
+function captureAudio(event) {
+  if (!state.recording || !state.holdActive) return;
+  const copy = cloneSamples(event.inputBuffer.getChannelData(0));
+  const frameMs = (copy.length / state.audioContext.sampleRate) * 1000;
+  const level = rootMeanSquare(copy);
+  state.inputLevel = state.inputLevel * 0.72 + level * 0.28;
+
+  if (state.awaitingResponse || state.playingQueue || state.responseNode) {
+    state.noiseFloor = state.noiseFloor * 0.99 + Math.min(level, 0.02) * 0.01;
+    resetSpeechSegment();
+    updateButton();
+    return;
+  }
+
+  const streamed = resample(copy, state.audioContext.sampleRate);
+  const threshold = Math.max(0.009, state.noiseFloor * 2.6);
+  const voiced = level >= threshold;
+  if (!state.speechActive) {
+    state.noiseFloor = state.noiseFloor * 0.985 + Math.min(level, 0.02) * 0.015;
+    state.preRoll.push(streamed);
+    while (
+      state.preRoll.reduce((total, chunk) => total + chunk.length, 0) > 3_200
+    ) {
+      state.preRoll.shift();
+    }
+    if (voiced) {
+      state.speechActive = true;
+      state.speechMs = frameMs;
+      state.silenceMs = 0;
+      for (const chunk of state.preRoll) queueStreamAudio(chunk);
+      state.preRoll = [];
+      setPhase("listening", "Listening continuously; pause naturally to send.");
+    }
+  } else {
+    queueStreamAudio(streamed);
+    state.speechMs += frameMs;
+    state.captureMs += frameMs;
+    state.silenceMs = voiced ? 0 : state.silenceMs + frameMs;
+    if (state.silenceMs >= 700 && state.speechMs >= 300) {
+      void commitSpeechSegment();
+    }
+  }
+  updateButton();
+}
+
 function resetCapture() {
   state.chunks = [];
-  state.captureMs = 0;
   state.inputLevel = 0;
+  resetSpeechSegment();
 }
 
 function stopMicrophone() {
@@ -572,7 +686,7 @@ function queueAudio(url, notBeforeUnixMs = 0) {
 }
 
 async function playNextAudio() {
-  if (state.playingQueue || state.holdActive || !state.audioQueue.length) return;
+  if (state.playingQueue || !state.audioQueue.length) return;
   state.playingQueue = true;
   const item = state.audioQueue.shift();
   const { url, notBeforeUnixMs } = item;
@@ -585,14 +699,13 @@ async function playNextAudio() {
     if (remainingDelay) {
       await new Promise((resolve) => setTimeout(resolve, remainingDelay));
     }
-    if (state.holdActive) return;
     stopThoughtSoundscape();
     stopPlayback();
     const node = state.audioContext.createBufferSource();
     node.buffer = decoded;
     node.connect(state.analyser);
     state.responseNode = node;
-    setPhase("speaking", "Tap the circle to stop speech and pause deeper consideration.");
+    setPhase("speaking", "The mic stays on but ignores the assistant’s playback.");
     await new Promise((resolve) => {
       state.responseResolve = resolve;
       node.onended = () => {
@@ -612,8 +725,19 @@ async function playNextAudio() {
   } finally {
     state.queuedAudio.delete(url);
     state.playingQueue = false;
-    if (state.audioQueue.length) void playNextAudio();
-    else if (!state.holdActive && state.activeTurn) renderTurn(state.activeTurn);
+    if (state.audioQueue.length) {
+      void playNextAudio();
+    } else if (state.activeTurn) {
+      if (["complete", "cancelled", "error"].includes(state.activeTurn.status)) {
+        state.awaitingResponse = false;
+      }
+      if (state.holdActive && !state.awaitingResponse) {
+        setPhase("listening", "Mic on; speak whenever you’re ready.");
+      } else {
+        renderTurn(state.activeTurn);
+      }
+      updateButton();
+    }
   }
 }
 
@@ -632,20 +756,33 @@ async function interruptThought() {
   }
 }
 
-async function beginHold(event) {
-  if (!state.ready || state.holdActive) return;
+async function toggleMicrophone(event) {
   event?.preventDefault();
-  if (activeDeepThought()) {
-    await interruptThought();
+  if (!state.ready) return;
+  if (state.holdActive) {
+    const shouldCommit = state.speechActive && state.speechMs >= 250;
+    state.holdActive = false;
+    if (shouldCommit) await commitSpeechSegment();
+    else {
+      try {
+        await api(
+          `/api/voice/streams/reset?session_id=${encodeURIComponent(state.sessionId)}`,
+          { method: "POST" },
+        );
+      } catch (_error) {}
+    }
+    stopMicrophone();
+    resetCapture();
+    setPhase("ready", "Microphone off.");
+    updateButton();
     return;
   }
-  if (event?.pointerId !== undefined) {
-    try { ui.speechButton.setPointerCapture(event.pointerId); } catch (_error) {}
-  }
+
+  stopPlayback(true);
+  state.awaitingResponse = false;
   state.holdActive = true;
-  stopThoughtSoundscape();
-  stopPlayback();
-  setPhase("listening", "Release when you have finished.");
+  resetCapture();
+  setPhase("listening", "Mic on; speak whenever you’re ready.");
   try {
     await ensureAudioContext();
     if (state.holdActive) await startMicrophone();
@@ -654,53 +791,7 @@ async function beginHold(event) {
     stopMicrophone();
     setPhase("error", error.message || String(error));
   }
-}
-
-async function endHold(event) {
-  if (!state.holdActive) return;
-  event?.preventDefault();
-  state.holdActive = false;
-  const chunks = state.chunks;
-  const captureMs = state.captureMs;
-  const sourceRate = state.audioContext?.sampleRate || 16_000;
-  const wasRecording = state.recording;
-  stopMicrophone();
-  resetCapture();
-  if (!wasRecording || captureMs < 250 || !chunks.length) {
-    setPhase("ready", "Hold a little longer, then release.");
-    return;
-  }
-  const samples = resample(concatenateChunks(chunks), sourceRate);
-  try {
-    startThoughtSoundscape(samples);
-  } catch (_error) {
-    stopThoughtSoundscape();
-    setPhase("routing", "Holding a quiet field between voices.");
-  }
-  await sendUtterance(samples);
-}
-
-async function sendUtterance(samples) {
-  ui.speechButton.disabled = true;
-  try {
-    const payload = await api(
-      `/api/voice/utterances?session_id=${encodeURIComponent(state.sessionId)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: samples.buffer,
-      },
-    );
-    renderTurn(payload.turn);
-    if (payload.event?.audio_url) queueAudio(payload.event.audio_url);
-    startPolling(payload.turn.id);
-  } catch (error) {
-    stopThoughtSoundscape();
-    setPhase("error", `${error.message || error} Hold to try again.`);
-  } finally {
-    ui.speechButton.disabled = false;
-    updateButton();
-  }
+  updateButton();
 }
 
 function startPolling(turnId) {
@@ -709,14 +800,14 @@ function startPolling(turnId) {
     try {
       const payload = await api(`/api/voice/turns/${turnId}`);
       renderTurn(payload.turn);
-      if (["routing", "queued", "running", "paused"].includes(payload.turn.status)) {
-        state.polling = setTimeout(poll, 650);
+      if (["routing", "responding", "queued", "running", "paused"].includes(payload.turn.status)) {
+        state.polling = setTimeout(poll, 150);
       }
     } catch (error) {
       toast(error.message || String(error), true);
     }
   };
-  state.polling = setTimeout(poll, 350);
+  state.polling = setTimeout(poll, 100);
 }
 
 async function decide(continueThinking) {
@@ -869,7 +960,7 @@ async function warmVoice() {
     state.ready = Boolean(status.ready);
     ui.runtimeDot.classList.toggle("online", state.ready);
     ui.runtimeLabel.textContent = state.ready ? "Speech ready" : "Speech unavailable";
-    setPhase("ready", "Hold the circle and speak naturally.");
+    setPhase("ready", "Tap the circle once to open the microphone.");
   } catch (error) {
     state.ready = false;
     ui.runtimeLabel.textContent = "Speech unavailable";
@@ -891,32 +982,17 @@ async function routeToDirectGatewayWhenNeeded() {
 
 ui.loginForm.addEventListener("submit", login);
 ui.logoutButton.addEventListener("click", () => lockCouncil());
-ui.speechButton.addEventListener("pointerdown", beginHold);
-ui.speechButton.addEventListener("pointerup", endHold);
-ui.speechButton.addEventListener("pointercancel", endHold);
-ui.speechButton.addEventListener("lostpointercapture", endHold);
+ui.speechButton.addEventListener("click", toggleMicrophone);
 ui.speechButton.addEventListener("contextmenu", (event) => event.preventDefault());
 ui.continueButton.addEventListener("click", () => decide(true));
 ui.stopButton.addEventListener("click", () => decide(false));
-window.addEventListener("pointerup", endHold);
 window.addEventListener("blur", () => {
-  if (state.holdActive) void endHold();
+  if (state.holdActive && !state.recording) state.holdActive = false;
 });
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && gateway.authenticated) {
     void lockCouncil();
-    return;
   }
-  if (
-    [" ", "Enter"].includes(event.key)
-    && document.activeElement === ui.speechButton
-    && !event.repeat
-  ) {
-    void beginHold(event);
-  }
-});
-window.addEventListener("keyup", (event) => {
-  if ([" ", "Enter"].includes(event.key) && state.holdActive) void endHold(event);
 });
 
 window.requestAnimationFrame(drawWaveform);
