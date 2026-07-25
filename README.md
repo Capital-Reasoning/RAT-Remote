@@ -41,9 +41,10 @@ and finish with the normal pipeline's Talkie output verbatim.
 
 GPT-OSS also chooses a constrained chord and same-key progression from the
 conversational tone. Generated Chatterbox speech uses the 18-band chord vocoder
-fully wet. The selected chord is used for responses of five words or fewer;
-longer replies move through the progression at punctuation-weighted phrase
-boundaries. The selected harmony is shown beside the immediate response.
+fully wet at pitch-preserved `0.8×` speed. The selected chord is used for
+responses of five words or fewer; longer replies move through the progression
+at punctuation-weighted phrase boundaries. The selected harmony is shown
+beside the immediate response.
 
 GPT-OSS supplies a grounded reply brief, then Talkie renders it after GPT-OSS
 releases Metal execution. A deterministic supervisor keeps Talkie's candidate
