@@ -54,11 +54,15 @@ const state = {
   speechMs: 0,
   silenceMs: 0,
   noiseFloor: 0.004,
+  bargeInMs: 0,
+  bargeInPreRoll: [],
+  bargeInPending: false,
   streamChunks: [],
   streamSamples: 0,
   streamUpload: Promise.resolve(),
   awaitingResponse: false,
   activeTurn: null,
+  ignoredTurnIds: new Set(),
   polling: null,
   playedAudio: new Set(),
   queuedAudio: new Set(),
@@ -280,6 +284,7 @@ function appendMessage(key, role, label, text, kind = "", replace = false) {
 }
 
 function renderTurn(turn) {
+  if (state.ignoredTurnIds.has(turn.id)) return;
   state.activeTurn = turn;
   appendMessage(`${turn.id}:user`, "user", "You", turn.transcript);
   const streamGroups = new Map();
@@ -324,7 +329,7 @@ function renderTurn(turn) {
         kind,
       );
     }
-    if (event.audio_url) {
+    if (event.audio_url && !(turn.status === "cancelled" && turn.barge_in)) {
       queueAudio(event.audio_url, event.playback_not_before_unix_ms || 0);
     }
   }
@@ -576,6 +581,56 @@ function resetSpeechSegment() {
   state.captureMs = 0;
 }
 
+function resetBargeInDetection() {
+  state.bargeInMs = 0;
+  state.bargeInPreRoll = [];
+}
+
+async function cancelActiveTurnForBargeIn(turnId) {
+  try {
+    const payload = await api(`/api/voice/turns/${turnId}/cancel`, {
+      method: "POST",
+    });
+    if (state.activeTurn?.id === turnId) state.activeTurn = payload.turn;
+  } catch (error) {
+    if (!String(error.message || error).includes("not found")) {
+      toast(error.message || String(error), true);
+    }
+  } finally {
+    state.bargeInPending = false;
+  }
+}
+
+function beginBargeIn() {
+  if (state.bargeInPending) return;
+  const interruptedTurn = state.activeTurn;
+  const preserved = concatenateChunks(state.bargeInPreRoll);
+  const preservedMs = state.bargeInMs;
+  state.bargeInPending = true;
+  if (interruptedTurn) state.ignoredTurnIds.add(interruptedTurn.id);
+  resetBargeInDetection();
+  clearTimeout(state.polling);
+  state.polling = null;
+  stopPlayback(true);
+  stopThoughtSoundscape();
+  state.awaitingResponse = false;
+  resetSpeechSegment();
+  queueStreamAudio(preserved);
+  state.captureMs = preservedMs;
+  state.speechActive = true;
+  state.speechMs = preservedMs;
+  state.silenceMs = 0;
+  setPhase("listening", "I stopped. I’m listening to you.");
+
+  const turnIsActive = interruptedTurn
+    && !["complete", "cancelled", "error"].includes(interruptedTurn.status);
+  if (turnIsActive) {
+    void cancelActiveTurnForBargeIn(interruptedTurn.id);
+  } else {
+    state.bargeInPending = false;
+  }
+}
+
 async function commitSpeechSegment() {
   if (state.awaitingResponse || state.speechMs < 250) {
     resetSpeechSegment();
@@ -610,13 +665,26 @@ function captureAudio(event) {
   const level = rootMeanSquare(copy);
   state.inputLevel = state.inputLevel * 0.72 + level * 0.28;
 
-  if (state.awaitingResponse || state.playingQueue || state.responseNode) {
+  const assistantPlayback = state.playingQueue || state.responseNode;
+  const assistantGenerating = state.awaitingResponse
+    && state.activeTurn
+    && !["complete", "cancelled", "error"].includes(state.activeTurn.status);
+  if (!state.bargeInPending && (assistantPlayback || assistantGenerating)) {
     state.noiseFloor = state.noiseFloor * 0.99 + Math.min(level, 0.02) * 0.01;
-    resetSpeechSegment();
+    const streamed = resample(copy, state.audioContext.sampleRate);
+    const threshold = Math.max(0.015, state.noiseFloor * 3.5);
+    if (level >= threshold) {
+      state.bargeInMs += frameMs;
+      state.bargeInPreRoll.push(streamed);
+      if (state.bargeInMs >= 120) beginBargeIn();
+    } else {
+      resetBargeInDetection();
+    }
     updateButton();
     return;
   }
 
+  resetBargeInDetection();
   const streamed = resample(copy, state.audioContext.sampleRate);
   queueStreamAudio(streamed);
   state.captureMs += frameMs;
@@ -646,6 +714,8 @@ function captureAudio(event) {
 function resetCapture() {
   state.chunks = [];
   state.inputLevel = 0;
+  state.bargeInPending = false;
+  resetBargeInDetection();
   resetSpeechSegment();
 }
 
@@ -693,7 +763,10 @@ async function startMicrophone() {
 }
 
 function stopPlayback(clearQueue = false) {
-  if (clearQueue) state.audioQueue = [];
+  if (clearQueue) {
+    for (const item of state.audioQueue) state.queuedAudio.delete(item.url);
+    state.audioQueue = [];
+  }
   const node = state.responseNode;
   const resolve = state.responseResolve;
   state.responseNode = null;
@@ -733,7 +806,7 @@ async function playNextAudio() {
     node.buffer = decoded;
     node.connect(state.analyser);
     state.responseNode = node;
-    setPhase("speaking", "The mic stays on but ignores the assistant’s playback.");
+    setPhase("speaking", "Speak over me at any time and I’ll stop.");
     await new Promise((resolve) => {
       state.responseResolve = resolve;
       node.onended = () => {
@@ -760,7 +833,12 @@ async function playNextAudio() {
         state.awaitingResponse = false;
       }
       if (state.holdActive && !state.awaitingResponse) {
-        setPhase("listening", "Mic on; speak whenever you’re ready.");
+        setPhase(
+          "listening",
+          state.speechActive
+            ? "I stopped. I’m listening to you."
+            : "Mic on; speak whenever you’re ready.",
+        );
       } else {
         renderTurn(state.activeTurn);
       }
@@ -827,6 +905,10 @@ function startPolling(turnId) {
   const poll = async () => {
     try {
       const payload = await api(`/api/voice/turns/${turnId}`);
+      if (
+        state.ignoredTurnIds.has(turnId)
+        || state.activeTurn?.id !== turnId
+      ) return;
       renderTurn(payload.turn);
       if (["routing", "responding", "queued", "running", "paused"].includes(payload.turn.status)) {
         state.polling = setTimeout(poll, 60);

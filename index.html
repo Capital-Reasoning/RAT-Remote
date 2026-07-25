@@ -71,7 +71,7 @@
         <div id="conversationLog" class="conversation-log" aria-live="polite">
           <div id="emptyConversation" class="empty-conversation">
             <strong>Tap once, then speak naturally.</strong>
-            <p>Each newly heard word starts a fresh speculative reply. Nothing is spoken until a 400 ms pause releases the newest matching draft.</p>
+            <p>Each newly heard word starts a fresh speculative reply. A 400 ms pause releases the newest matching draft; speaking over the reply stops it and keeps your opening words.</p>
           </div>
         </div>
 
@@ -124,7 +124,7 @@
         <article class="model-note">
           <span>ASR</span><strong>Parakeet 110M</strong>
           <span>VOICE</span><strong>Supertonic 3 · M5 male · 1.0×</strong>
-          <span>CONVERSATION</span><strong>Typewriter 1938 7.2B · streamed</strong>
+          <span>CONVERSATION</span><strong>Typewriter 1938 7.2B · temp 0.50 · streamed</strong>
           <span>ESCALATION</span><strong>RAT Council · only when warranted</strong>
         </article>
       </aside>
@@ -132,6 +132,6 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="./app.js?v=rat-council-13" defer></script>
+  <script src="./app.js?v=rat-council-14" defer></script>
 </body>
 </html>
