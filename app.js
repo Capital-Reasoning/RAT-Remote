@@ -66,6 +66,7 @@ const state = {
   audioQueue: [],
   playingQueue: false,
   seenMessages: new Set(),
+  messageNodes: new Map(),
   thoughtStartedAt: 0,
   thoughtSeed: 0,
   thoughtStage: 0,
@@ -182,6 +183,7 @@ async function lockCouncil(callGateway = true) {
   state.playedAudio.clear();
   state.queuedAudio.clear();
   state.seenMessages.clear();
+  state.messageNodes.clear();
   ui.conversationLog.querySelectorAll(".message").forEach((message) => message.remove());
   ui.emptyConversation.hidden = false;
   ui.runtimeDot.classList.remove("online");
@@ -203,7 +205,8 @@ function setPhase(phase, message = "") {
     waking: ["Preparing local speech", "WAKING"],
     ready: ["Ready when you are", "READY"],
     listening: ["Listening", "LISTENING"],
-    routing: ["Between voices", "RESONANCE"],
+    routing: ["Typewriter is answering", "RESPONDING"],
+    responding: ["Typewriter is answering", "RESPONDING"],
     thinking: ["The council is considering it", "THINKING"],
     speaking: ["Speaking", "SPEAKING"],
     paused: ["Deeper consideration paused", "PAUSED"],
@@ -252,8 +255,17 @@ function updateButton() {
   ui.decisionPanel.hidden = !paused;
 }
 
-function appendMessage(key, role, label, text, kind = "") {
-  if (!text || state.seenMessages.has(key)) return;
+function appendMessage(key, role, label, text, kind = "", replace = false) {
+  if (!text) return;
+  const existing = state.messageNodes.get(key);
+  if (existing) {
+    if (replace) {
+      existing.heading.textContent = label;
+      existing.copy.textContent = text;
+      ui.conversationLog.scrollTop = ui.conversationLog.scrollHeight;
+    }
+    return;
+  }
   state.seenMessages.add(key);
   ui.emptyConversation.hidden = true;
   const item = document.createElement("article");
@@ -263,6 +275,7 @@ function appendMessage(key, role, label, text, kind = "") {
   const copy = document.createElement("p");
   copy.textContent = text;
   item.append(heading, copy);
+  state.messageNodes.set(key, { heading, copy });
   ui.conversationLog.append(item);
   ui.conversationLog.scrollTop = ui.conversationLog.scrollHeight;
 }
@@ -270,16 +283,17 @@ function appendMessage(key, role, label, text, kind = "") {
 function renderTurn(turn) {
   state.activeTurn = turn;
   appendMessage(`${turn.id}:user`, "user", "You", turn.transcript);
+  const streamGroups = new Map();
   for (const event of turn.events || []) {
     const labels = {
-      backchannel: "Talkie",
-      immediate: "Talkie",
-      progress: "Talkie · considering",
-      final: "Talkie · final verbatim",
-      decision: "Talkie",
-      route: "Talkie · decision",
-      cancelled: "Talkie",
-      error: "Talkie",
+      backchannel: "Typewriter",
+      immediate: "Typewriter",
+      progress: "Council · considering",
+      final: "Council · final",
+      decision: "Council",
+      route: "Council · decision",
+      cancelled: "Council",
+      error: "RAT",
     };
     const kind = event.kind === "final"
       ? "final"
@@ -294,16 +308,36 @@ function renderTurn(turn) {
     const label = event.kind === "immediate" && harmonyName
       ? `${immediateLabel} · ${harmonyName}`
       : immediateLabel;
-    appendMessage(
-      `${turn.id}:event:${event.id}`,
-      "assistant",
-      label,
-      event.text,
-      kind,
-    );
+    if (event.stream_group) {
+      const group = streamGroups.get(event.stream_group) || {
+        label,
+        kind,
+        chunks: [],
+      };
+      group.chunks.push(String(event.text || "").trim());
+      streamGroups.set(event.stream_group, group);
+    } else {
+      appendMessage(
+        `${turn.id}:event:${event.id}`,
+        "assistant",
+        label,
+        event.text,
+        kind,
+      );
+    }
     if (event.audio_url) {
       queueAudio(event.audio_url, event.playback_not_before_unix_ms || 0);
     }
+  }
+  for (const [groupId, group] of streamGroups) {
+    appendMessage(
+      `${turn.id}:stream:${groupId}`,
+      "assistant",
+      group.label,
+      group.chunks.filter(Boolean).join(" "),
+      group.kind,
+      true,
+    );
   }
   if (turn.status === "paused") {
     setPhase("paused", "Answer by voice or choose below.");
@@ -313,9 +347,7 @@ function renderTurn(turn) {
       "I’m considering this more deeply. Tap once if you want to interrupt.",
     );
   } else if (["routing", "responding"].includes(turn.status)) {
-    setPhase("routing", (turn.events || []).some((event) => event.kind === "backchannel")
-      ? "Talkie is staying with the thread."
-      : "Talkie is leaning in.");
+    setPhase("routing", "Typewriter is forming the first spoken phrase.");
   } else if (turn.status === "error") {
     stopThoughtSoundscape();
     setPhase("error", turn.error || "The voice turn failed.");
@@ -608,7 +640,7 @@ function captureAudio(event) {
     state.speechMs += frameMs;
     state.captureMs += frameMs;
     state.silenceMs = voiced ? 0 : state.silenceMs + frameMs;
-    if (state.silenceMs >= 700 && state.speechMs >= 300) {
+    if (state.silenceMs >= 420 && state.speechMs >= 300) {
       void commitSpeechSegment();
     }
   }
@@ -801,13 +833,13 @@ function startPolling(turnId) {
       const payload = await api(`/api/voice/turns/${turnId}`);
       renderTurn(payload.turn);
       if (["routing", "responding", "queued", "running", "paused"].includes(payload.turn.status)) {
-        state.polling = setTimeout(poll, 150);
+        state.polling = setTimeout(poll, 60);
       }
     } catch (error) {
       toast(error.message || String(error), true);
     }
   };
-  state.polling = setTimeout(poll, 100);
+  state.polling = setTimeout(poll, 40);
 }
 
 async function decide(continueThinking) {
