@@ -57,6 +57,11 @@ const state = {
   audioQueue: [],
   playingQueue: false,
   seenMessages: new Set(),
+  thoughtStartedAt: 0,
+  thoughtSeed: 0,
+  thoughtStage: 0,
+  thoughtTimers: [],
+  thoughtSoundscape: null,
 };
 
 function toast(message, error = false) {
@@ -158,6 +163,7 @@ async function lockCouncil(callGateway = true) {
   state.polling = null;
   state.holdActive = false;
   stopMicrophone();
+  stopThoughtSoundscape();
   stopPlayback(true);
   gateway.bearer = "";
   gateway.authenticated = false;
@@ -188,7 +194,7 @@ function setPhase(phase, message = "") {
     waking: ["Preparing local speech", "WAKING"],
     ready: ["Ready when you are", "READY"],
     listening: ["Listening", "LISTENING"],
-    routing: ["Talkie has answered", "ROUTING"],
+    routing: ["Between voices", "RESONANCE"],
     thinking: ["The council is considering it", "THINKING"],
     speaking: ["Speaking", "SPEAKING"],
     paused: ["Deeper consideration paused", "PAUSED"],
@@ -207,6 +213,7 @@ function updateButton() {
   ui.speechButton.disabled = !state.ready;
   ui.speechButton.classList.toggle("listening", state.holdActive);
   ui.speechButton.classList.toggle("interrupt", interruptible);
+  ui.speechButton.classList.toggle("constellating", Boolean(state.thoughtStartedAt));
   ui.speechButton.setAttribute("aria-pressed", String(state.holdActive));
   if (!state.ready) {
     ui.buttonLabel.textContent = "Waking speech…";
@@ -214,6 +221,9 @@ function updateButton() {
   } else if (state.holdActive) {
     ui.buttonLabel.textContent = "Release to send";
     ui.buttonHint.textContent = `${Math.max(0, state.captureMs / 1000).toFixed(1)} seconds`;
+  } else if (state.phase === "routing" && state.thoughtStartedAt) {
+    ui.buttonLabel.textContent = "···";
+    ui.buttonHint.textContent = "A quiet field between voices";
   } else if (interruptible) {
     ui.buttonLabel.textContent = "Tap to interrupt";
     ui.buttonHint.textContent = "Deeper consideration will pause";
@@ -251,7 +261,6 @@ function renderTurn(turn) {
   appendMessage(`${turn.id}:user`, "user", "You", turn.transcript);
   for (const event of turn.events || []) {
     const labels = {
-      backchannel: "Talkie · listening",
       immediate: "Talkie · immediate",
       progress: "Talkie · considering",
       final: "Talkie · final verbatim",
@@ -262,15 +271,18 @@ function renderTurn(turn) {
     };
     const kind = event.kind === "final"
       ? "final"
-      : ["backchannel", "progress"].includes(event.kind)
+      : event.kind === "progress"
         ? event.kind
         : "";
     const immediateLabel = event.dialogue_source === "gpt-oss:20b_fallback"
       ? "Immediate · OSS supervised"
       : labels[event.kind] || event.kind;
-    const chordName = event.voice_effect?.chord_name;
-    const label = event.kind === "immediate" && chordName
-      ? `${immediateLabel} · ${chordName}`
+    const wordCount = String(event.text || "").trim().split(/\s+/).filter(Boolean).length;
+    const harmonyName = wordCount > 5
+      ? event.voice_effect?.progression_name
+      : event.voice_effect?.chord_name;
+    const label = event.kind === "immediate" && harmonyName
+      ? `${immediateLabel} · ${harmonyName}`
       : immediateLabel;
     appendMessage(
       `${turn.id}:event:${event.id}`,
@@ -291,10 +303,14 @@ function renderTurn(turn) {
       "I’m considering this more deeply. Tap once if you want to interrupt.",
     );
   } else if (turn.status === "routing") {
-    setPhase("routing", "I’m deciding whether this needs deeper consideration.");
+    setPhase("routing", state.thoughtStartedAt
+      ? "A harmonic field is moving with the cadence you left behind."
+      : "Holding a quiet field between voices.");
   } else if (turn.status === "error") {
+    stopThoughtSoundscape();
     setPhase("error", turn.error || "The voice turn failed.");
   } else if (!state.playingQueue && !state.holdActive) {
+    stopThoughtSoundscape();
     setPhase(
       "ready",
       turn.status === "cancelled"
@@ -327,6 +343,128 @@ function rootMeanSquare(samples) {
   let sum = 0;
   for (let index = 0; index < samples.length; index += 1) sum += samples[index] ** 2;
   return Math.sqrt(sum / Math.max(1, samples.length));
+}
+
+function stopThoughtSoundscape() {
+  for (const timer of state.thoughtTimers) clearTimeout(timer);
+  state.thoughtTimers = [];
+  const soundscape = state.thoughtSoundscape;
+  state.thoughtSoundscape = null;
+  if (soundscape && state.audioContext) {
+    const now = state.audioContext.currentTime;
+    soundscape.master.gain.cancelScheduledValues(now);
+    soundscape.master.gain.setTargetAtTime(0.0001, now, 0.055);
+    setTimeout(() => {
+      for (const source of soundscape.sources) {
+        try { source.stop(); } catch (_error) {}
+        try { source.disconnect(); } catch (_error) {}
+      }
+      try { soundscape.master.disconnect(); } catch (_error) {}
+    }, 240);
+  }
+  state.thoughtStartedAt = 0;
+  state.thoughtStage = 0;
+  ui.speechButton.classList.remove("constellating");
+}
+
+function startThoughtSoundscape(samples) {
+  stopThoughtSoundscape();
+  let signature = 0;
+  const stride = Math.max(1, Math.floor(samples.length / 48));
+  for (let index = 0; index < samples.length; index += stride) {
+    signature += Math.abs(samples[index]) * (1 + (index % 17));
+  }
+  state.thoughtSeed = signature % 1;
+  state.thoughtStartedAt = performance.now();
+  setPhase("routing", "A harmonic field is moving with the cadence you left behind.");
+
+  if (!state.audioContext) return;
+  const context = state.audioContext;
+  const now = context.currentTime;
+  const rms = rootMeanSquare(samples);
+  const rootChoices = [110.0, 123.47, 130.81, 146.83];
+  const root = rootChoices[Math.floor(state.thoughtSeed * rootChoices.length) % rootChoices.length];
+  const master = context.createGain();
+  const filter = context.createBiquadFilter();
+  const delay = context.createDelay(1.0);
+  const feedback = context.createGain();
+  const wet = context.createGain();
+  const sources = [];
+
+  master.gain.setValueAtTime(0.0001, now);
+  master.gain.exponentialRampToValueAtTime(
+    Math.min(0.032, 0.014 + rms * 0.24),
+    now + 0.28,
+  );
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(720 + state.thoughtSeed * 420, now);
+  filter.Q.value = 0.65;
+  delay.delayTime.value = 0.34 + state.thoughtSeed * 0.11;
+  feedback.gain.value = 0.19;
+  wet.gain.value = 0.38;
+  filter.connect(master);
+  filter.connect(delay);
+  delay.connect(feedback);
+  feedback.connect(delay);
+  delay.connect(wet);
+  wet.connect(master);
+  master.connect(context.destination);
+
+  const intervals = [1.0, 1.5, 2.25];
+  intervals.forEach((ratio, index) => {
+    const oscillator = context.createOscillator();
+    const voiceGain = context.createGain();
+    oscillator.type = index === 1 ? "triangle" : "sine";
+    oscillator.frequency.setValueAtTime(root * ratio, now);
+    oscillator.detune.value = (index - 1) * (2.5 + state.thoughtSeed * 3);
+    oscillator.frequency.setTargetAtTime(
+      root * [1.0, 4 / 3, 2.0][index],
+      now + 2.2,
+      0.85,
+    );
+    oscillator.frequency.setTargetAtTime(
+      root * [1.0, 1.5, 2.25][index],
+      now + 4.5,
+      1.1,
+    );
+    voiceGain.gain.value = [0.48, 0.23, 0.12][index];
+    oscillator.connect(voiceGain);
+    voiceGain.connect(filter);
+    oscillator.start(now);
+    sources.push(oscillator);
+  });
+
+  const lfo = context.createOscillator();
+  const lfoDepth = context.createGain();
+  lfo.type = "sine";
+  lfo.frequency.value = 0.07 + state.thoughtSeed * 0.045;
+  lfoDepth.gain.value = 150;
+  lfo.connect(lfoDepth);
+  lfoDepth.connect(filter.frequency);
+  lfo.start(now);
+  sources.push(lfo);
+
+  const noiseBuffer = context.createBuffer(1, Math.round(context.sampleRate * 1.5), context.sampleRate);
+  const noise = noiseBuffer.getChannelData(0);
+  for (let index = 0; index < noise.length; index += 1) {
+    noise[index] = (Math.random() * 2 - 1) * (1 - index / noise.length);
+  }
+  const noiseSource = context.createBufferSource();
+  const noiseFilter = context.createBiquadFilter();
+  const noiseGain = context.createGain();
+  noiseSource.buffer = noiseBuffer;
+  noiseSource.loop = true;
+  noiseFilter.type = "bandpass";
+  noiseFilter.frequency.value = 1250 + state.thoughtSeed * 900;
+  noiseFilter.Q.value = 1.1;
+  noiseGain.gain.value = 0.035;
+  noiseSource.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(delay);
+  noiseSource.start(now);
+  sources.push(noiseSource);
+
+  state.thoughtSoundscape = { master, sources };
 }
 
 function captureAudio(event) {
@@ -448,6 +586,7 @@ async function playNextAudio() {
       await new Promise((resolve) => setTimeout(resolve, remainingDelay));
     }
     if (state.holdActive) return;
+    stopThoughtSoundscape();
     stopPlayback();
     const node = state.audioContext.createBufferSource();
     node.buffer = decoded;
@@ -468,6 +607,7 @@ async function playNextAudio() {
     });
     state.playedAudio.add(url);
   } catch (error) {
+    stopThoughtSoundscape();
     toast(error.message || String(error), true);
   } finally {
     state.queuedAudio.delete(url);
@@ -503,6 +643,7 @@ async function beginHold(event) {
     try { ui.speechButton.setPointerCapture(event.pointerId); } catch (_error) {}
   }
   state.holdActive = true;
+  stopThoughtSoundscape();
   stopPlayback();
   setPhase("listening", "Release when you have finished.");
   try {
@@ -529,12 +670,13 @@ async function endHold(event) {
     setPhase("ready", "Hold a little longer, then release.");
     return;
   }
-  await sendUtterance(resample(concatenateChunks(chunks), sourceRate));
+  const samples = resample(concatenateChunks(chunks), sourceRate);
+  startThoughtSoundscape(samples);
+  await sendUtterance(samples);
 }
 
 async function sendUtterance(samples) {
   ui.speechButton.disabled = true;
-  setPhase("routing", "Transcribing locally, then asking Talkie…");
   try {
     const payload = await api(
       `/api/voice/utterances?session_id=${encodeURIComponent(state.sessionId)}`,
@@ -548,6 +690,7 @@ async function sendUtterance(samples) {
     if (payload.event?.audio_url) queueAudio(payload.event.audio_url);
     startPolling(payload.turn.id);
   } catch (error) {
+    stopThoughtSoundscape();
     setPhase("error", `${error.message || error} Hold to try again.`);
   } finally {
     ui.speechButton.disabled = false;
@@ -592,6 +735,66 @@ async function decide(continueThinking) {
   }
 }
 
+function drawThoughtConstellation(context, width, height, time, density) {
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const baseRadius = Math.min(width, height) * 0.385;
+  const elapsed = (time - state.thoughtStartedAt) / 1000;
+  const nodes = [];
+  const count = 9;
+
+  context.save();
+  context.translate(centerX, centerY);
+  context.rotate(state.thoughtSeed * Math.PI * 2 + elapsed * 0.035);
+  context.setLineDash([2 * density, 8 * density]);
+  context.lineWidth = Math.max(0.7, density * 0.7);
+  context.strokeStyle = "rgba(131,214,255,.12)";
+  context.beginPath();
+  context.arc(0, 0, baseRadius, 0, Math.PI * 2);
+  context.stroke();
+  context.setLineDash([]);
+  context.restore();
+
+  for (let index = 0; index < count; index += 1) {
+    const direction = index % 2 ? -1 : 1;
+    const angle = state.thoughtSeed * 4.7
+      + (index / count) * Math.PI * 2
+      + elapsed * (0.09 + index * 0.003) * direction;
+    const breathing = Math.sin(elapsed * 1.15 + index * 1.7) * baseRadius * 0.035;
+    const radius = baseRadius * (0.88 + (index % 3) * 0.055) + breathing;
+    nodes.push({
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+      pulse: 0.55 + 0.45 * Math.sin(elapsed * 2.1 + index),
+    });
+  }
+
+  context.lineWidth = Math.max(0.65, density * 0.6);
+  for (let index = 0; index < count; index += 1) {
+    const next = nodes[(index + 2 + (index % 2)) % count];
+    context.beginPath();
+    context.moveTo(nodes[index].x, nodes[index].y);
+    context.lineTo(next.x, next.y);
+    context.strokeStyle = `rgba(216,255,114,${0.055 + nodes[index].pulse * 0.07})`;
+    context.stroke();
+  }
+
+  for (let index = 0; index < count; index += 1) {
+    const node = nodes[index];
+    const radius = (1.7 + node.pulse * 2.2) * density;
+    context.beginPath();
+    context.arc(node.x, node.y, radius * 2.7, 0, Math.PI * 2);
+    context.fillStyle = `rgba(131,214,255,${0.025 + node.pulse * 0.035})`;
+    context.fill();
+    context.beginPath();
+    context.arc(node.x, node.y, radius, 0, Math.PI * 2);
+    context.fillStyle = index % 3 === 0
+      ? "rgba(255,194,117,.9)"
+      : "rgba(216,255,114,.88)";
+    context.fill();
+  }
+}
+
 function drawWaveform(time) {
   const canvas = ui.waveform;
   if (!canvas) return;
@@ -605,6 +808,11 @@ function drawWaveform(time) {
   }
   const context = canvas.getContext("2d");
   context.clearRect(0, 0, width, height);
+  if (state.thoughtStartedAt && state.phase === "routing") {
+    drawThoughtConstellation(context, width, height, time, density);
+    window.requestAnimationFrame(drawWaveform);
+    return;
+  }
   const center = height / 2;
   const margin = width * 0.1;
   const span = width - margin * 2;

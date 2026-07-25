@@ -237,7 +237,6 @@ button:disabled { cursor: wait; opacity: 0.55; }
 .message.user { justify-self: end; border-color: rgba(216, 255, 114, 0.2); background: rgba(216, 255, 114, 0.08); }
 .message.assistant { justify-self: start; background: rgba(255, 255, 255, 0.04); }
 .message.progress { border-color: rgba(131, 214, 255, 0.18); background: rgba(131, 214, 255, 0.045); }
-.message.backchannel { border-color: rgba(195, 173, 255, 0.16); background: rgba(195, 173, 255, 0.035); }
 .message.final { border-color: rgba(255, 194, 117, 0.28); background: rgba(255, 194, 117, 0.055); }
 .message small {
   display: block;
@@ -268,6 +267,10 @@ button:disabled { cursor: wait; opacity: 0.55; }
 .speech-button.listening {
   border-color: var(--lime);
   box-shadow: inset 0 0 0 18px rgba(216, 255, 114, 0.03), 0 0 80px rgba(216, 255, 114, 0.13);
+}
+.speech-button.constellating {
+  animation: constellation-breathe 2.8s ease-in-out infinite;
+  border-color: rgba(131, 214, 255, 0.38);
 }
 .speech-button.interrupt { border-color: rgba(255, 194, 117, 0.44); }
 #waveformCanvas { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -334,6 +337,13 @@ button:disabled { cursor: wait; opacity: 0.55; }
 }
 .toast.visible { opacity: 1; transform: none; }
 .toast.error { border-color: rgba(255, 139, 128, 0.4); }
+@keyframes constellation-breathe {
+  0%, 100% { box-shadow: inset 0 0 0 18px rgba(131, 214, 255, 0.018), 0 24px 90px rgba(0, 0, 0, 0.38); }
+  50% { box-shadow: inset 0 0 0 18px rgba(131, 214,255, 0.038), 0 0 75px rgba(131, 214,255, 0.1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .speech-button.constellating { animation: none; }
+}
 
 @media (max-width: 900px) {
   .voice-workspace { grid-template-columns: 1fr; }

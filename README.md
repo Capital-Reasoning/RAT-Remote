@@ -30,16 +30,17 @@ The gateway still requires authentication for every private Council request.
 ## Conversation flow
 
 After login, hold the central circle while speaking and release it to send.
-Parakeet transcribes locally, a cached context-sensitive Talkie backchannel plays
-without waiting for generation, then Talkie answers through Chatterbox Turbo
-MLX while GPT-OSS decides whether the utterance warrants the full Council.
-Deeper turns receive concise spoken stage updates and finish with the normal
-pipeline's Talkie output verbatim.
+The captured waveform immediately seeds a quiet, nonverbal Web Audio
+soundscape. It fades before Talkie answers through Chatterbox Turbo MLX.
+Parakeet transcribes locally while GPT-OSS decides whether the utterance
+warrants the full Council. Deeper turns receive concise spoken stage updates
+and finish with the normal pipeline's Talkie output verbatim.
 
-GPT-OSS also chooses a constrained chord carrier from the conversational tone.
-Generated Chatterbox speech uses the 18-band chord vocoder fully wet. The
-selected chord is shown beside the immediate response; the cached listening cue
-stays dry so it is never delayed by tone selection.
+GPT-OSS also chooses a constrained chord and same-key progression from the
+conversational tone. Generated Chatterbox speech uses the 18-band chord vocoder
+fully wet. The selected chord is used for responses of five words or fewer;
+longer replies move through the progression at punctuation-weighted phrase
+boundaries. The selected harmony is shown beside the immediate response.
 
 GPT-OSS supplies a grounded reply brief, then Talkie renders it after GPT-OSS
 releases Metal execution. A deterministic supervisor keeps Talkie's candidate
