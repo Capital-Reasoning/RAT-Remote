@@ -28,6 +28,12 @@ const ui = {
   toast: $("#toast"),
 };
 
+const SPEECH_LEVEL_FLOOR = 0.015;
+const SPEECH_NOISE_MULTIPLIER = 3.2;
+const SPEECH_ONSET_MS = 100;
+const SPEECH_MIN_VOICED_MS = 160;
+const SPEECH_PRE_ROLL_SAMPLES = 3_200;
+
 const gateway = {
   bearer: "",
   authenticated: false,
@@ -52,8 +58,13 @@ const state = {
   inputLevel: 0,
   speechActive: false,
   speechMs: 0,
+  speechVoicedMs: 0,
   silenceMs: 0,
   noiseFloor: 0.004,
+  speechOnsetMs: 0,
+  speechOnsetChunks: [],
+  speechPreRoll: [],
+  speechPreRollSamples: 0,
   bargeInMs: 0,
   bargeInPreRoll: [],
   bargeInPending: false,
@@ -289,6 +300,7 @@ function renderTurn(turn) {
   appendMessage(`${turn.id}:user`, "user", "You", turn.transcript);
   const streamGroups = new Map();
   for (const event of turn.events || []) {
+    if (event.kind === "route" && event.deep === false) continue;
     const labels = {
       backchannel: "Typewriter",
       immediate: "Typewriter",
@@ -575,10 +587,43 @@ function flushStreamAudio() {
 function resetSpeechSegment() {
   state.speechActive = false;
   state.speechMs = 0;
+  state.speechVoicedMs = 0;
   state.silenceMs = 0;
+  state.speechOnsetMs = 0;
+  state.speechOnsetChunks = [];
+  state.speechPreRoll = [];
+  state.speechPreRollSamples = 0;
   state.streamChunks = [];
   state.streamSamples = 0;
   state.captureMs = 0;
+}
+
+function rememberSpeechPreRoll(samples) {
+  if (!samples.length) return;
+  state.speechPreRoll.push(samples);
+  state.speechPreRollSamples += samples.length;
+  while (
+    state.speechPreRollSamples > SPEECH_PRE_ROLL_SAMPLES
+    && state.speechPreRoll.length
+  ) {
+    const overflow = state.speechPreRollSamples - SPEECH_PRE_ROLL_SAMPLES;
+    const first = state.speechPreRoll[0];
+    if (first.length <= overflow) {
+      state.speechPreRoll.shift();
+      state.speechPreRollSamples -= first.length;
+    } else {
+      state.speechPreRoll[0] = first.slice(overflow);
+      state.speechPreRollSamples -= overflow;
+    }
+  }
+}
+
+function resetSpeechOnset(preserveAsPreRoll = false) {
+  if (preserveAsPreRoll) {
+    for (const chunk of state.speechOnsetChunks) rememberSpeechPreRoll(chunk);
+  }
+  state.speechOnsetMs = 0;
+  state.speechOnsetChunks = [];
 }
 
 function resetBargeInDetection() {
@@ -619,6 +664,7 @@ function beginBargeIn() {
   state.captureMs = preservedMs;
   state.speechActive = true;
   state.speechMs = preservedMs;
+  state.speechVoicedMs = preservedMs;
   state.silenceMs = 0;
   setPhase("listening", "I stopped. I’m listening to you.");
 
@@ -632,7 +678,11 @@ function beginBargeIn() {
 }
 
 async function commitSpeechSegment() {
-  if (state.awaitingResponse || state.speechMs < 250) {
+  if (
+    state.awaitingResponse
+    || state.speechMs < 250
+    || state.speechVoicedMs < SPEECH_MIN_VOICED_MS
+  ) {
     resetSpeechSegment();
     return;
   }
@@ -656,6 +706,18 @@ async function commitSpeechSegment() {
     resetSpeechSegment();
     updateButton();
   }
+}
+
+function discardSpeechSegment() {
+  flushStreamAudio();
+  state.streamUpload = state.streamUpload.then(() => api(
+    `/api/voice/streams/reset?session_id=${encodeURIComponent(state.sessionId)}`,
+    { method: "POST" },
+  )).catch((error) => {
+    toast(error.message || String(error), true);
+  });
+  resetSpeechSegment();
+  setPhase("listening", "Mic on; waiting for a clear voice.");
 }
 
 function captureAudio(event) {
@@ -686,26 +748,54 @@ function captureAudio(event) {
 
   resetBargeInDetection();
   const streamed = resample(copy, state.audioContext.sampleRate);
-  queueStreamAudio(streamed);
-  state.captureMs += frameMs;
-  const threshold = Math.max(0.009, state.noiseFloor * 2.6);
+  const threshold = Math.max(
+    SPEECH_LEVEL_FLOOR,
+    state.noiseFloor * SPEECH_NOISE_MULTIPLIER,
+  );
   const voiced = level >= threshold;
   if (!state.speechActive) {
-    state.noiseFloor = state.noiseFloor * 0.985 + Math.min(level, 0.02) * 0.015;
+    state.noiseFloor = state.noiseFloor * 0.98 + Math.min(level, 0.025) * 0.02;
     if (voiced) {
-      state.speechActive = true;
-      state.speechMs = frameMs;
-      state.silenceMs = 0;
-      setPhase(
-        "listening",
-        "Drafting continuously; a 400 ms pause releases the newest reply.",
-      );
+      state.speechOnsetMs += frameMs;
+      state.speechOnsetChunks.push(streamed);
+      if (state.speechOnsetMs >= SPEECH_ONSET_MS) {
+        for (const chunk of state.speechPreRoll) queueStreamAudio(chunk);
+        for (const chunk of state.speechOnsetChunks) queueStreamAudio(chunk);
+        state.captureMs = (
+          state.speechPreRollSamples
+          + state.speechOnsetChunks.reduce(
+            (samples, chunk) => samples + chunk.length,
+            0,
+          )
+        ) / 16;
+        state.speechActive = true;
+        state.speechMs = state.speechOnsetMs;
+        state.speechVoicedMs = state.speechOnsetMs;
+        state.silenceMs = 0;
+        state.speechPreRoll = [];
+        state.speechPreRollSamples = 0;
+        resetSpeechOnset();
+        setPhase(
+          "listening",
+          "Drafting continuously; a 400 ms pause releases the newest reply.",
+        );
+      }
+    } else {
+      resetSpeechOnset(true);
+      rememberSpeechPreRoll(streamed);
     }
   } else {
+    queueStreamAudio(streamed);
+    state.captureMs += frameMs;
     state.speechMs += frameMs;
+    if (voiced) state.speechVoicedMs += frameMs;
     state.silenceMs = voiced ? 0 : state.silenceMs + frameMs;
-    if (state.silenceMs >= 400 && state.speechMs >= 300) {
-      void commitSpeechSegment();
+    if (state.silenceMs >= 400) {
+      if (state.speechVoicedMs >= SPEECH_MIN_VOICED_MS) {
+        void commitSpeechSegment();
+      } else {
+        discardSpeechSegment();
+      }
     }
   }
   updateButton();
@@ -742,7 +832,8 @@ async function startMicrophone() {
       channelCount: { ideal: 1 },
       echoCancellation: true,
       noiseSuppression: true,
-      autoGainControl: true,
+      autoGainControl: false,
+      voiceIsolation: { ideal: true },
     },
     video: false,
   });
@@ -866,7 +957,9 @@ async function toggleMicrophone(event) {
   event?.preventDefault();
   if (!state.ready) return;
   if (state.holdActive) {
-    const shouldCommit = state.speechActive && state.speechMs >= 250;
+    const shouldCommit = state.speechActive
+      && state.speechMs >= 250
+      && state.speechVoicedMs >= SPEECH_MIN_VOICED_MS;
     state.holdActive = false;
     if (shouldCommit) await commitSpeechSegment();
     else {
