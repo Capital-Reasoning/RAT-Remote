@@ -32,37 +32,26 @@ the doorway automatically moves to that same-origin copy before login.
 
 ## Conversation flow
 
-After login, hold the central circle while speaking and release it to send.
-The captured waveform immediately seeds a quiet, nonverbal Web Audio
-soundscape. It fades before Talkie answers through Chatterbox Turbo MLX.
-Parakeet transcribes locally while GPT-OSS decides whether the utterance
-warrants the full Council. Deeper turns receive concise spoken stage updates
-and finish with the normal pipeline's Talkie output verbatim.
+After login, tap the central circle to leave the microphone open. Parakeet
+refreshes its partial transcript every 200 ms. Whenever the normalized final
+word changes, the warm Typewriter 1938 model supersedes its previous silent
+draft and begins again from the latest utterance.
 
-GPT-OSS also chooses a constrained chord and same-key progression from the
-conversational tone. Generated Chatterbox speech uses the 18-band chord vocoder
-fully wet at pitch-preserved `0.8×` speed. The selected chord is used for
-responses of five words or fewer; longer replies move through the progression
-at punctuation-weighted phrase boundaries. The selected harmony is shown
-beside the immediate response.
+Nothing speculative is displayed or spoken. A 400 ms acoustic pause commits
+the turn, Parakeet produces the final transcript, and the server releases a
+draft only when its transcript matches that final result. Stale drafts are
+cancelled. Stable phrase prefixes then stream into five-step Supertonic 3
+synthesis using the male `M5` style at native `1.0×` speed.
 
-GPT-OSS supplies a grounded reply brief, then Talkie renders it after GPT-OSS
-releases Metal execution. A deterministic supervisor keeps Talkie's candidate
-only when it preserves the brief, speaker roles, clarification needs, supported
-numbers, and scope.
-Otherwise the interface transparently labels and speaks the OSS-supervised
-wording.
+The experimental server-side vocoder remains bypassed. The browser combines
+the phrase chunks into one growing Typewriter message while audio plays in
+order. A deterministic gate can continue warranted requests through the normal
+RAT Council after the immediate response. Its spoken updates are broad public
+process summaries, not private chain-of-thought.
 
-The public conversation frames that work in Talkie's first person: “Let me
-consider that more deeply,” followed by broad summaries at stage changes and
-periodically during long stages. These summaries report public process state;
-they do not expose or claim a private chain-of-thought.
-
-Parakeet's acoustic alignment supplies word start/end milliseconds to the
-immediate Talkie prompt. A local timing planner distinguishes a clear handoff
-from an unfinished or reflective turn and supplies the desired reply gap. The
-user can barge in on Talkie; the hold gesture remains an explicit user turn
-boundary rather than pretending to provide full-duplex model interruption.
+The user can tap the microphone off for a manual boundary or interrupt
+playback. The current interface is turn-taking with speculative generation,
+not full-duplex simultaneous speech.
 
 The public page never uses cloud speech recognition, cloud synthesis,
 analytics, third-party scripts, or browser storage.
