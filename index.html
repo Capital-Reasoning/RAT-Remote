@@ -71,7 +71,7 @@
         <div id="conversationLog" class="conversation-log" aria-live="polite">
           <div id="emptyConversation" class="empty-conversation">
             <strong>Tap once, then speak naturally.</strong>
-            <p>The microphone streams continuously without silence detection. Tap it off when you want to send the complete turn.</p>
+            <p>Each newly heard word starts a fresh speculative reply. Nothing is spoken until a 400 ms pause releases the newest matching draft.</p>
           </div>
         </div>
 
@@ -111,8 +111,8 @@
         <article>
           <p class="eyebrow">FOUR TEMPOS</p>
           <ol>
-            <li><span>01</span><div><strong>Open microphone</strong><p>Tap once to stream continuously; tap it off to send. Silence never ends the turn automatically.</p></div></li>
-            <li><span>02</span><div><strong>Early response</strong><p>Warm Typewriter begins writing immediately; the first stable phrase goes straight to Supertonic M5.</p></div></li>
+            <li><span>01</span><div><strong>Listen ahead</strong><p>Parakeet refreshes the partial transcript every 200 ms and makes each changed final word a boundary.</p></div></li>
+            <li><span>02</span><div><strong>Draft continuously</strong><p>Warm Typewriter supersedes its prior silent draft as the utterance grows.</p></div></li>
             <li><span>03</span><div><strong>Overlapped speech</strong><p>Later phrases are generated while the first phrase is already playing, using the clean male M5 voice.</p></div></li>
             <li><span>04</span><div><strong>Considered</strong><p>When warranted, the deeper council continues separately and returns its final synthesis.</p></div></li>
           </ol>
@@ -132,6 +132,6 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="./app.js?v=rat-council-12" defer></script>
+  <script src="./app.js?v=rat-council-13" defer></script>
 </body>
 </html>

@@ -52,6 +52,8 @@ const state = {
   inputLevel: 0,
   speechActive: false,
   speechMs: 0,
+  silenceMs: 0,
+  noiseFloor: 0.004,
   streamChunks: [],
   streamSamples: 0,
   streamUpload: Promise.resolve(),
@@ -228,10 +230,10 @@ function updateButton() {
     ui.buttonLabel.textContent = "Waking speech…";
     ui.buttonHint.textContent = "Connecting to the Mac Studio";
   } else if (state.holdActive) {
-    ui.buttonLabel.textContent = state.speechActive ? "Recording" : "Mic on";
+    ui.buttonLabel.textContent = state.speechActive ? "Hearing you" : "Mic on";
     ui.buttonHint.textContent = state.awaitingResponse
       ? "Listening resumes after the reply"
-      : "Tap off to send";
+      : "A 400 ms pause releases the reply";
   } else if (state.phase === "routing" && state.thoughtStartedAt) {
     ui.buttonLabel.textContent = "···";
     ui.buttonHint.textContent = "A quiet field between voices";
@@ -553,7 +555,10 @@ function flushStreamAudio() {
       },
     );
     if (partial.partial_transcript && state.holdActive && !state.awaitingResponse) {
-      ui.status.textContent = `“${partial.partial_transcript}…”`;
+      const boundary = partial.speculation?.last_word;
+      ui.status.textContent = boundary
+        ? `“${partial.partial_transcript}…” · drafting after “${boundary}”`
+        : `“${partial.partial_transcript}…”`;
     }
   }).catch((error) => {
     state.awaitingResponse = false;
@@ -565,6 +570,7 @@ function flushStreamAudio() {
 function resetSpeechSegment() {
   state.speechActive = false;
   state.speechMs = 0;
+  state.silenceMs = 0;
   state.streamChunks = [];
   state.streamSamples = 0;
   state.captureMs = 0;
@@ -605,6 +611,7 @@ function captureAudio(event) {
   state.inputLevel = state.inputLevel * 0.72 + level * 0.28;
 
   if (state.awaitingResponse || state.playingQueue || state.responseNode) {
+    state.noiseFloor = state.noiseFloor * 0.99 + Math.min(level, 0.02) * 0.01;
     resetSpeechSegment();
     updateButton();
     return;
@@ -612,11 +619,26 @@ function captureAudio(event) {
 
   const streamed = resample(copy, state.audioContext.sampleRate);
   queueStreamAudio(streamed);
-  state.speechMs += frameMs;
   state.captureMs += frameMs;
+  const threshold = Math.max(0.009, state.noiseFloor * 2.6);
+  const voiced = level >= threshold;
   if (!state.speechActive) {
-    state.speechActive = true;
-    setPhase("listening", "Recording continuously; tap the mic off to send.");
+    state.noiseFloor = state.noiseFloor * 0.985 + Math.min(level, 0.02) * 0.015;
+    if (voiced) {
+      state.speechActive = true;
+      state.speechMs = frameMs;
+      state.silenceMs = 0;
+      setPhase(
+        "listening",
+        "Drafting continuously; a 400 ms pause releases the newest reply.",
+      );
+    }
+  } else {
+    state.speechMs += frameMs;
+    state.silenceMs = voiced ? 0 : state.silenceMs + frameMs;
+    if (state.silenceMs >= 400 && state.speechMs >= 300) {
+      void commitSpeechSegment();
+    }
   }
   updateButton();
 }
