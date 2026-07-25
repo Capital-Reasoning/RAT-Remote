@@ -91,7 +91,7 @@
             </span>
           </button>
           <p id="statusMessage" class="status-message">
-            Loading Parakeet and Chatterbox Turbo MLX…
+            Loading Parakeet and Supertonic M5…
           </p>
         </div>
 
@@ -112,26 +112,26 @@
           <p class="eyebrow">FOUR TEMPOS</p>
           <ol>
             <li><span>01</span><div><strong>Open microphone</strong><p>Tap once to stream speech continuously. A natural pause sends the current turn without closing the mic.</p></div></li>
-            <li><span>02</span><div><strong>Clean speech</strong><p>Chatterbox speaks directly; the experimental server-side vocoder is currently bypassed.</p></div></li>
-            <li><span>03</span><div><strong>Considered</strong><p>For warranted turns, Talkie says it will consider them more deeply and narrates broad first-person summaries.</p></div></li>
-            <li><span>04</span><div><strong>Verbatim</strong><p>The final Talkie rendering is displayed and spoken word for word.</p></div></li>
+            <li><span>02</span><div><strong>Early response</strong><p>Warm Typewriter begins writing immediately; the first stable phrase goes straight to Supertonic M5.</p></div></li>
+            <li><span>03</span><div><strong>Overlapped speech</strong><p>Later phrases are generated while the first phrase is already playing, using the clean male M5 voice.</p></div></li>
+            <li><span>04</span><div><strong>Considered</strong><p>When warranted, the deeper council continues separately and returns its final synthesis.</p></div></li>
           </ol>
         </article>
         <article class="audit-note">
           <p class="eyebrow">VISIBLE, NOT HIDDEN</p>
-          <p>Talkie speaks broad first-person summaries of public pipeline progress. It does not expose or claim private chain-of-thought.</p>
+          <p>Typewriter supplies the immediate conversational turn. The council exposes only broad first-person progress summaries, never private chain-of-thought.</p>
         </article>
         <article class="model-note">
           <span>ASR</span><strong>Parakeet 110M</strong>
-          <span>VOICE</span><strong>Chatterbox Turbo MLX · 0.8×</strong>
-          <span>GROUNDING</span><strong>Qwen 3.6 36B MoE</strong>
-          <span>COMPANION</span><strong>Talkie 1930 13B</strong>
+          <span>VOICE</span><strong>Supertonic 3 · M5 male · 1.0×</strong>
+          <span>CONVERSATION</span><strong>Typewriter 1938 7.2B · streamed</strong>
+          <span>ESCALATION</span><strong>RAT Council · only when warranted</strong>
         </article>
       </aside>
     </main>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="./app.js?v=rat-council-10" defer></script>
+  <script src="./app.js?v=rat-council-11" defer></script>
 </body>
 </html>
