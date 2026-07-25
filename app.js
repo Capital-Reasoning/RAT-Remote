@@ -671,7 +671,12 @@ async function endHold(event) {
     return;
   }
   const samples = resample(concatenateChunks(chunks), sourceRate);
-  startThoughtSoundscape(samples);
+  try {
+    startThoughtSoundscape(samples);
+  } catch (_error) {
+    stopThoughtSoundscape();
+    setPhase("routing", "Holding a quiet field between voices.");
+  }
   await sendUtterance(samples);
 }
 
@@ -872,6 +877,18 @@ async function warmVoice() {
   }
 }
 
+async function routeToDirectGatewayWhenNeeded() {
+  if (window.location.origin === GATEWAY_ORIGIN) return;
+  try {
+    const response = await fetch(`${GATEWAY_ORIGIN}/api/health`, {
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`Gateway health failed (${response.status})`);
+  } catch (_error) {
+    window.location.replace(`${GATEWAY_ORIGIN}/`);
+  }
+}
+
 ui.loginForm.addEventListener("submit", login);
 ui.logoutButton.addEventListener("click", () => lockCouncil());
 ui.speechButton.addEventListener("pointerdown", beginHold);
@@ -903,3 +920,4 @@ window.addEventListener("keyup", (event) => {
 });
 
 window.requestAnimationFrame(drawWaveform);
+void routeToDirectGatewayWhenNeeded();

@@ -26,6 +26,9 @@ secret. Access control is enforced by the HTTPS gateway on the model machine:
 
 The public Tailscale Funnel hostname is routing information, not a credential.
 The gateway still requires authentication for every private Council request.
+The gateway also serves this same reviewed static bundle. If browser policy
+blocks GitHub Pages from reaching a local-network-classified Tailscale address,
+the doorway automatically moves to that same-origin copy before login.
 
 ## Conversation flow
 
